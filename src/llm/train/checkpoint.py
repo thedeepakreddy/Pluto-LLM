@@ -49,7 +49,9 @@ def set_rng_state(state: dict) -> None:
     np.random.set_state((alg, keys.numpy().astype(np.uint32), pos, has_gauss, cached))
     torch.set_rng_state(state["torch"])
     if state["cuda"] and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        # A run may resume on a machine with fewer GPUs (Kaggle T4x2 -> P100): restore what exists.
+        for i, s in enumerate(state["cuda"][: torch.cuda.device_count()]):
+            torch.cuda.set_rng_state(s, i)
 
 
 def _ckpt_dir(run_dir: Path) -> Path:
@@ -114,7 +116,10 @@ def find_latest_valid(run_dir: Path) -> Path | None:
     candidates: list[Path] = []
     latest = d / "latest.json"
     if latest.exists():
-        candidates.append(d / json.loads(latest.read_text())["path"])
+        try:
+            candidates.append(d / json.loads(latest.read_text())["path"])
+        except (ValueError, KeyError, TypeError) as e:
+            warnings.warn(f"ignoring unreadable latest.json ({type(e).__name__}); scanning checkpoints")
     candidates += [p for p in sorted(d.glob("step_*.pt"), reverse=True) if p not in candidates]
     for p in candidates:
         if p.exists() and _loads(p):
@@ -142,15 +147,47 @@ def load_model_for_inference(path_or_run_dir: Path):
     return model, BPETokenizer.load(tokenizer_dir(cfg)), payload
 
 
-def maybe_upload(run_dir: Path, path: Path, hub_repo: str | None) -> None:
-    """Best-effort upload of a checkpoint to the Hugging Face Hub; never fails training."""
+_CREATED_REPOS: set[str] = set()
+
+
+def maybe_upload(run_dir: Path, path: Path, hub_repo: str | None, is_best: bool = False) -> None:
+    """Best-effort sync of the run to a private Hugging Face Hub repo; never fails training.
+
+    Uploads the run's small files (config, run.json, metrics, samples, logs) plus the new
+    checkpoint and latest.json, so `llm pull-run` can restore the run in a fresh session.
+    Authentication comes from the HF_TOKEN environment variable.
+    """
     if not hub_repo:
         return
     try:
-        from huggingface_hub import upload_file
+        from huggingface_hub import HfApi
 
-        for f in (path, Path(run_dir) / "checkpoints" / "latest.json"):
-            upload_file(path_or_fileobj=str(f), path_in_repo=f"{Path(run_dir).name}/checkpoints/{f.name}",
-                        repo_id=hub_repo)
+        api, run_dir = HfApi(), Path(run_dir)
+        if hub_repo not in _CREATED_REPOS:
+            api.create_repo(hub_repo, private=True, exist_ok=True)
+            _CREATED_REPOS.add(hub_repo)
+        api.upload_folder(folder_path=str(run_dir), path_in_repo=run_dir.name, repo_id=hub_repo,
+                          ignore_patterns=["checkpoints/*", "charts/*"])
+        files = [path, run_dir / "checkpoints" / "latest.json"]
+        if is_best:
+            files.append(run_dir / "checkpoints" / "best.pt")
+        for f in files:
+            api.upload_file(path_or_fileobj=str(f), path_in_repo=f"{run_dir.name}/checkpoints/{f.name}",
+                            repo_id=hub_repo)
     except Exception as e:
         warnings.warn(f"Hub upload failed (training continues): {e}")
+
+
+def pull_run(hub_repo: str, run_id: str, runs_root: Path) -> Path:
+    """Download a run directory previously synced by maybe_upload."""
+    from huggingface_hub import snapshot_download
+
+    runs_root = Path(runs_root)
+    runs_root.mkdir(parents=True, exist_ok=True)
+    snapshot_download(repo_id=hub_repo, allow_patterns=[f"{run_id}/*"], local_dir=str(runs_root))
+    run_dir = runs_root / run_id
+    if not (run_dir / "config.yaml").exists():
+        raise FileNotFoundError(f"run {run_id} not found in Hub repo {hub_repo}")
+    for d in ("checkpoints", "samples"):
+        (run_dir / d).mkdir(exist_ok=True)
+    return run_dir

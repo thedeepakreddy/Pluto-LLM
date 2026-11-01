@@ -1,8 +1,9 @@
-# LLM from scratch → Mini-Live
+# Pluto: an LLM from scratch → Mini-Live
 
-[![tests](https://github.com/thedeepakreddy/LLM/actions/workflows/ci.yml/badge.svg)](https://github.com/thedeepakreddy/LLM/actions/workflows/ci.yml)
+[![tests](https://github.com/thedeepakreddy/Pluto-LLM/actions/workflows/ci.yml/badge.svg)](https://github.com/thedeepakreddy/Pluto-LLM/actions/workflows/ci.yml)
 
-A reproducible language-model training system built from scratch in plain PyTorch: our own
+**Pluto** is the first small model in a planned family. This repo is a reproducible
+language-model training system built from scratch in plain PyTorch: our own
 byte-level BPE tokenizer, our own GPT, our own training loop with exact resume, and an
 evaluation/report pipeline. It is the foundation for **Mini-Live**, a small native speech + text
 model that listens and talks back in real time, and longer term a model that can see, talk and text.
@@ -48,6 +49,7 @@ llm resume runs/<run-id>     # continue exactly from the latest valid checkpoint
 llm generate runs/<run-id> --prompt "Once upon a time" --seed 1
 llm report runs/<run-id>     # report.md + charts
 llm compare runs/<a> runs/<b>
+llm pull-run <hub_repo> <run-id>  # restore a run after a dead session
 ```
 
 `configs/m1-overfit.yaml` is the sanity check: a ~0.1M model that must memorise 20 stories.
@@ -58,8 +60,14 @@ the whole pipeline with a deliberate interruption and resume.
 
 Training stops cleanly and saves a checkpoint on `--stop-at-step N`, on SIGTERM/SIGINT, or
 when `train.max_wall_time_s` is reached (11.5 h by default, before Kaggle's 12 h limit).
-`llm resume` continues **bit-for-bit identically** on CPU (tested) and refuses to resume if the
-config, data or tokenizer changed since the checkpoint.
+`llm resume` continues **bit-for-bit identically** on CPU (tested; on GPU, some kernels are
+non-deterministic, so resumed losses match closely rather than exactly) and refuses to resume if
+the config, data or tokenizer changed since the checkpoint. Rebuilding identical data, tokenizer
+and shards in a new session is accepted.
+
+If the whole session dies (Kaggle/Colab), set `train.hub_repo` and an `HF_TOKEN`: the run
+directory and checkpoints are synced to a private Hugging Face repo, and
+`llm pull-run <hub_repo> <run_id>` restores it before `llm resume`.
 
 ## Reproducibility guarantees
 

@@ -144,6 +144,20 @@ def _compare(args) -> int:
     return 0
 
 
+def _pull_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("hub_repo", help="Hugging Face repo id, e.g. your-name/pluto-runs")
+    p.add_argument("run_id", help="run directory name, e.g. m1-tinystories-20261101-120000-abc1234")
+    p.add_argument("--runs-root", default="runs")
+
+
+@command("pull-run", "restore a run directory from the Hugging Face Hub (after a session dies)", _pull_args)
+def _pull_run(args) -> int:
+    from llm.train.checkpoint import pull_run
+
+    print(pull_run(args.hub_repo, args.run_id, args.runs_root))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

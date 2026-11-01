@@ -54,8 +54,14 @@ def git_sha() -> tuple[str | None, bool]:
         return None, False
 
 
+# Fields that describe *when/how* an artifact was made, not *what* it is. They are kept in the
+# manifest for humans but excluded from its checksum, so rebuilding identical inputs on a new
+# machine (e.g. after a Kaggle session dies) yields the same checksum and resume still works.
+VOLATILE_FIELDS = ("created_at", "git_sha", "git_dirty", "info")
+
+
 def write_manifest(dir: Path, kind: str, name: str, version: int, files: list[str],
-                   inputs: dict[str, str], extra: dict | None = None) -> dict:
+                   inputs: dict[str, str], extra: dict | None = None, info: dict | None = None) -> dict:
     dir = Path(dir)
     sha, dirty = git_sha()
     manifest = {
@@ -68,6 +74,7 @@ def write_manifest(dir: Path, kind: str, name: str, version: int, files: list[st
         "files": {f: sha256_file(dir / f) for f in files},
         "inputs": dict(inputs),
         "extra": extra or {},
+        "info": info or {},
     }
     atomic_write_json(dir / MANIFEST, manifest)
     return json.loads((dir / MANIFEST).read_text())
@@ -81,10 +88,9 @@ def read_manifest(dir: Path) -> dict:
 
 
 def manifest_checksum(dir: Path) -> str:
-    p = Path(dir) / MANIFEST
-    if not p.exists():
-        raise ProvenanceError(f"no manifest.json in {dir}")
-    return sha256_file(p)
+    """Checksum of what the artifact *is* (kind, name, version, files, inputs, extra)."""
+    identity = {k: v for k, v in read_manifest(dir).items() if k not in VOLATILE_FIELDS}
+    return sha256_bytes(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode())
 
 
 def verify_files(dir: Path) -> None:

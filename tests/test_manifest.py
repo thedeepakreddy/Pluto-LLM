@@ -51,3 +51,18 @@ def test_atomic_write_leaves_no_tmp(tmp_path):
     atomic_write_json(tmp_path / "f.json", {"a": 1})
     assert json.loads((tmp_path / "f.json").read_text()) == {"a": 1}
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_checksum_ignores_timestamps_and_info(tmp_path):
+    import time
+
+    a = tmp_path / "a"
+    make_artifact(a)
+    first = manifest_checksum(a)
+    time.sleep(0.01)
+    a.mkdir(exist_ok=True)
+    write_manifest(a, "test", "a", 1, files=["x.bin"], inputs={}, info={"seconds": 99})
+    assert manifest_checksum(a) == first
+    (a / "x.bin").write_bytes(b"different")
+    write_manifest(a, "test", "a", 1, files=["x.bin"], inputs={})
+    assert manifest_checksum(a) != first

@@ -67,3 +67,8 @@ until its milestone.
      frame; codebook 1 loss weighted higher (configurable).
   4. **Controlled comparison:** text-then-audio kept as a baseline; both trained with identical
      size, data, steps and seed, compared by Whisper word error rate → a measured research result.
+- **Creator identity in M2:** PCID statements (faithful templates + paraphrases, aspirations kept
+  as goals, `current_location` excluded) mixed into text batches (every 50th step) and spoken into
+  an `identity` speech split (every 20th step); identity recall measured in text and speech on
+  held-out phrasings. Raw dataset kept out of the public repo; Q&A ability comes in M5.
+- **Execution method for M2:** subagent-driven (fresh implementer + reviewer per task).

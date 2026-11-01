@@ -20,6 +20,7 @@
 - Acoustic delay default `1`; code loss weights default `[3, 1, 1, 1, 1, 1, 1, 1]`; text-only batch every 10th step (`text_every = 10`).
 - Voice default `bf_emma`; chunk limit 30 s; pilot `hours = 200`; QA fraction 0.02, QA max WER 0.3.
 - Frozen demo set version `speech-demo-v1` (10 sentences); held-out eval = first 200 test chunks.
+- Creator identity: raw PCID never committed to the repo (local path or private HF dataset); tests use a fictional fixture only; aspirations never phrased as achievements; `current_location` excluded by default.
 - Checkpoints load with `weights_only=True`; manifests use the deterministic checksum from M1; no session links in commits.
 
 ## Review Focus
@@ -50,6 +51,7 @@ src/llm/speech/dataset.py         SpeechShards, SpeechBatch, collate, next_speec
 src/llm/speech/generate.py        speak, continue_speech (KV-cached, forced-choice text)
 src/llm/speech/evaluate.py        DEMO_SENTENCES, evaluate_speech, ceiling_wer
 src/llm/speech/app.py             Gradio demo (lazy import)
+src/llm/identity/pcid.py          creator identity: load PCID, statements, probes, prepare_identity
 src/llm/train/loop.py             refactor: BaseTrainer + TextTrainer (behaviour unchanged)
 src/llm/train/speech_loop.py      SpeechTrainer, warm_start_from_text
 src/llm/report.py                 + speech section
@@ -276,7 +278,30 @@ tests/test_speech_*.py, tests/test_voice_model.py, tests/test_kv_cache.py, tests
 
 ---
 
-### Task 12: `llm speak`, `llm continue-speech`, Gradio demo
+### Task 12: Creator identity data (PCID): statements, mixing, recall evaluation
+
+**Files:** Create `src/llm/identity/{__init__,pcid}.py`; Modify `src/llm/config.py`, `src/llm/speech/build.py`, `src/llm/speech/dataset.py`, `src/llm/train/speech_loop.py`, `src/llm/speech/evaluate.py`, `src/llm/cli.py`; Test `tests/test_identity.py`, fixture `tests/fixtures/pcid_sample/` (a small **fictional** creator, "Ada Example", with the same file layout — never the real dataset)
+
+**Interfaces:**
+- Produces:
+  - `IdentityConfig(path: str | None = None, hf_dataset: str | None = None, name: str = "pcid", version: int = 1, exclude_fields: tuple[str, ...] = ("current_location",), holdout_fraction: float = 0.2, text_every: int = 50, speech_every: int = 20, root: str = "identity")`; `Config.identity: IdentityConfig | None = None`; exactly one of `path`/`hf_dataset` required (`ConfigError`).
+  - `@dataclass(frozen=True) Statement(text: str, source: str, status: str, fact: str, holdout: bool)`; `@dataclass(frozen=True) Probe(prompt: str, expected: tuple[str, ...], fact: str)`.
+  - `load_pcid(root: Path) -> dict[str, object]` (reads the documented files; missing optional files skipped; unknown files ignored).
+  - `build_statements(pcid: dict, exclude_fields: tuple[str, ...], holdout_fraction: float) -> list[Statement]` — deterministic templates per fact (creator name ×4 phrasings, short name, personality, naming meaning, origin points, vision/capability goals phrased "Pluto's creator wants Pluto to …", approved creator message sentences, education ×2 each, projects (name + category), seed Q&A as `"Question: {q} Answer: {a}"`); holdout chosen by `sha256(text) % 1000 < holdout_fraction*1000`, never holding out all phrasings of a fact.
+  - `build_probes(pcid) -> list[Probe]`: `("Pluto was created by", ("deepak",), "creator_name")`, `("Pluto is named after", ("universe", "space", "planet"), "naming")`, `("Pluto's creator studied", ("computer science", "btech"), "education")`, `("One of the creator's AI projects is", ("echo", "aira", "gita"), "projects")` — expected strings derived from the loaded records, lowercase.
+  - `prepare_identity(cfg) -> Path`: writes `identity/<name>-v<version>/{statements.jsonl, probes.jsonl, identity_report.md}` + manifest (deterministic checksum; `extra` = counts by source/status/holdout). HF source via `huggingface_hub.snapshot_download(repo_type="dataset")`.
+  - Speech builder: when `cfg.identity` is set, an extra split `identity` (train statements) and `identity_eval` (holdout) synthesised with the same pipeline (no hours limit; all statements).
+  - Batching: `next_speech_batch` gains `identity_text: list[list[int]] | None` and `identity_speech: SpeechShards | None`; precedence per step: `(step+1) % identity.text_every == 0` → identity text batch; else `(step+1) % identity.speech_every == 0` → identity speech batch; else the existing text_every/speech logic. Deterministic choice via `epoch_order(len, seed, step)`.
+  - `identity_recall(model, tok, probes, mode: Literal["text", "speech"], codec=None, asr=None, audio=None) -> dict` → `{"recall", "per_fact": {fact: recall}, "items": [...]}`; text mode = greedy continuation of 24 tokens contains any expected string (case-insensitive); speech mode = `speak(prompt)` then `continue_speech` 60 frames → ASR transcript contains expected. Written into `speech_eval.json` under `"identity"`; report shows an "Identity recall" table.
+  - CLI `llm prepare-identity <config>`.
+
+- [ ] **Step 1: Write failing tests** (fictional fixture only): `test_statements_deterministic`; `test_statements_faithful` (every statement's key value appears verbatim in the source records — no invented names, dates or numbers); `test_aspirations_stay_goals` (statements from `long_term_vision`/`creator_philosophy` all contain "wants" or "aims"); `test_exclude_fields` (fixture location string never appears); `test_holdout_keeps_each_fact_trainable`; `test_probes_from_records`; `test_identity_mixing_schedule` (steps 49, 99 identity text; 19, 39, 59 identity speech; precedence at step 99 = text); `test_identity_recall_text_with_memorising_model` (tiny SpeechGPT overfit on the statements for 300 steps → creator-name recall ≥ 0.9 on held-out phrasings; `slow`); `test_prepare_identity_manifest`; `test_identity_config_requires_one_source`.
+- [ ] **Step 2: Run** `pytest tests/test_identity.py -v` → FAIL.  **Step 3: Implement.**  **Step 4: Run** → PASS; `pytest -q` green.
+- [ ] **Step 5: Commit** `feat(m2): creator identity statements, mixing and recall evaluation`.
+
+---
+
+### Task 13: `llm speak`, `llm continue-speech`, Gradio demo
 
 **Files:** Create `src/llm/speech/app.py`; Modify `src/llm/cli.py`, `src/llm/train/checkpoint.py`; Test `tests/test_speech_cli.py`
 
@@ -292,7 +317,7 @@ tests/test_speech_*.py, tests/test_voice_model.py, tests/test_kv_cache.py, tests
 
 ---
 
-### Task 13: Real adapters + `llm speech-check` (Stage 0)
+### Task 14: Real adapters + `llm speech-check` (Stage 0)
 
 **Files:** Create `src/llm/speech/adapters.py`; Modify `src/llm/cli.py`; Test `tests/test_speech_adapters.py`
 
@@ -310,7 +335,7 @@ tests/test_speech_*.py, tests/test_voice_model.py, tests/test_kv_cache.py, tests
 
 ---
 
-### Task 14: Configs, Kaggle notebook, README, end-to-end test
+### Task 15: Configs, Kaggle notebook, README, end-to-end test
 
 **Files:** Create `configs/m2-stage0.yaml`, `configs/m2-warmstart.yaml`, `configs/m2-speech-aligned.yaml`, `configs/m2-speech-baseline.yaml`, `notebooks/m2_kaggle.ipynb`, `tests/test_m2_e2e.py`; Modify `README.md`
 
@@ -323,6 +348,7 @@ Config values:
 | audio | — | layout aligned, delay 1, init_from = warm-start best.pt | layout text_then_audio, otherwise identical |
 | speech | — | tinystories-speech v1, bf_emma, 200 h | same |
 | train | 2,400 steps × 81,920 tokens (micro 32), lr 1e-3, warmup 200 | micro 16, tokens_per_step 40,960, 6,000 steps, lr 6e-4, warmup 300, eval_every 500 | identical to aligned |
+| identity | — | path or private HF dataset (`identity.hf_dataset`) | same |
 | run.name | m2-warmstart | m2-aligned | m2-baseline |
 
 `m2-stage0.yaml` = aligned config with `speech.hours: 0.3`, `val_chunks: 20`, `test_chunks: 20`, `max_steps: 50`.
@@ -337,7 +363,7 @@ Config values:
 
 ## Self-review notes
 
-- Spec §2 dataset → Tasks 2–4, 13; §3 model/layouts/KV cache → Tasks 5, 7, 8, 9; §4 training/warm start/text mixing/comparison → Tasks 6, 10, 14; §5 evaluation → Task 11; §6 demo → Tasks 12, 14; §7 testing → per task + Task 14; §8 risks → Review Focus + Task 13 (`speech-check`, Whisper timing fallback).
+- Spec §2 dataset → Tasks 2–4, 13; §3 model/layouts/KV cache → Tasks 5, 7, 8, 9; §4 training/warm start/text mixing/comparison → Tasks 6, 10, 14; §5 evaluation → Task 11; §2b identity → Task 12; §6 demo → Tasks 13, 15; §7 testing → per task + Task 14; §8 risks → Review Focus + Task 13 (`speech-check`, Whisper timing fallback).
 - Spec refinement (ruling): "text never lags its audio" is implemented as one frame of text lead with forward spill when tokens crowd a frame; `max_text_lag` is measured and reported instead of guaranteed 0. Cost if wrong: slot rule change in `build_aligned` only.
 - Spec refinement: the voice box uses d_model 192 (not 256) to keep the total within the spec's ~25–30M (computed ≈ 30M).
 - Interface names cross-checked: `SpeechConfig`, `AudioConfig`, `special_ids`, `Example`, `SpeechBatch`, `next_speech_batch`, `SpeechGPT.step`, `DepthTransformer.sample`, `speak`, `continue_speech`, `evaluate_speech`, `ceiling_wer`, `warm_start_from_text`, `load_speech_model_for_inference`, `make_tts/make_codec/make_asr`.

@@ -19,6 +19,8 @@ M2 is done when:
    the untrained floor, with the ceiling (Kokoro → Mimi round trip) reported alongside.
 4. The main-vs-baseline comparison is reported honestly (difference vs seed variation).
 5. `llm speak`, `llm continue-speech` and a Gradio demo work from a trained checkpoint.
+6. Identity recall is reported in text and speech on held-out phrasings (target: the creator's
+   name recalled in text ≥ 90% of held-out probes).
 
 Stretch (Stage 4): ~800 h of speech, WER ≤ 15%.
 
@@ -55,6 +57,35 @@ TinyStories (M1 data splits) → sentence chunks ≤ ~30 s → Kokoro (bf_emma, 
 - **Sizes:** pilot ~200 h (~25k chunks); scale-up ~800 h. ~0.6 GB of codes at 800 h.
 - **Resumable generation:** a progress file records finished chunk ids; a killed session resumes.
   Versioned manifests and provenance checks exactly as in M1 (deterministic checksums).
+
+## 2b. Creator identity data (Pluto Creator Identity Dataset, PCID v1.1)
+
+Pluto learns facts about itself and its creator from the creator's own dataset.
+
+- **Source:** the PCID folder (identity, biography, education, philosophy, approved creator
+  message, Pluto origin/naming/vision/lineage, projects, skills, timeline, seed Q&A). Loaded from a
+  local path or a **private** Hugging Face dataset; the raw dataset is not committed to the public
+  repo unless the creator decides otherwise.
+- **Statements:** a deterministic converter turns records into short, faithful sentences with a
+  few paraphrases per key fact (e.g. "Pluto was created by Gorisi Deepak Reddy." / "The creator of
+  Pluto is Gorisi Deepak Reddy."). Rules from the dataset's own README are enforced: aspirations
+  stay phrased as goals ("Pluto's creator wants Pluto to…"), nothing is invented, private
+  contact data is never used, and fields listed in `exclude_fields` (default: `current_location`)
+  are skipped. Every statement keeps its source file and status (`creator_stated`, `aspiration`,
+  `source-derived`). Seed Q&A pairs are kept as `Question: … Answer: …` text.
+- **Split:** ~20% of paraphrases are held out for evaluation, so recall can be told apart from
+  exact memorisation.
+- **Text:** every `identity.text_every`-th step (default 50) is a text-only batch of identity
+  statements.
+- **Speech:** the statements are also spoken by Kokoro (`bf_emma`) into a separate `identity`
+  split, mixed in every `identity.speech_every`-th step (default 20), so Pluto can *say* them.
+- **Evaluation: identity recall.** Fixed probes (prompt → expected answer substring), e.g.
+  "Pluto was created by" → "Deepak"; "Pluto is named after" → "universe/space"; measured in text
+  (greedy continuation) and in speech (spoken continuation → Whisper transcript), on held-out
+  phrasings.
+- **Honest scope:** M2 Pluto can *complete and say* these facts. Answering free-form questions
+  about them requires instruction tuning (M5), where the same dataset becomes Q&A training data
+  and a retrieval store (as the dataset README recommends: weights are not the only memory).
 
 ## 3. Model
 

@@ -147,6 +147,29 @@ def load_model_for_inference(path_or_run_dir: Path):
     return model, BPETokenizer.load(tokenizer_dir(cfg)), payload
 
 
+def load_speech_model_for_inference(path_or_run_dir: Path):
+    """Rebuild the SpeechGPT, tokenizer and config from a checkpoint file or a run directory."""
+    from llm.config import load_config_dict
+    from llm.model.voice import SpeechGPT
+    from llm.tokenizer.bpe import BPETokenizer, tokenizer_dir
+
+    p = Path(path_or_run_dir)
+    if p.is_dir():
+        found = find_latest_valid(p)
+        if found is None:
+            raise FileNotFoundError(f"no valid checkpoint in {p}")
+        p = found
+    payload = torch.load(p, map_location="cpu", weights_only=True)
+    cfg = load_config_dict(payload["config"])
+    if cfg.audio is None:
+        raise ValueError(f"{p} is not a speech checkpoint (config has no audio section)")
+    tok = BPETokenizer.load(tokenizer_dir(cfg))
+    model = SpeechGPT(cfg.model, cfg.audio, tok.vocab_size + 4)
+    model.load_state_dict(payload["model"])
+    model.eval()
+    return model, tok, cfg
+
+
 _CREATED_REPOS: set[str] = set()
 
 

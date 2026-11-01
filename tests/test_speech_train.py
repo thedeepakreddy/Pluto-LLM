@@ -90,7 +90,9 @@ def _gpt_ckpt(tmp_path, cfg, **model_over):
     torch.manual_seed(0)
     gpt = GPT(mc, cfg.tokenizer.vocab_size)
     path = tmp_path / "m1.pt"
-    torch.save({"model": gpt.state_dict()}, path)
+    from dataclasses import asdict
+
+    torch.save({"model": gpt.state_dict(), "config": {"model": asdict(mc)}}, path)
     return gpt, path
 
 
@@ -114,13 +116,17 @@ def test_warm_start_copies_weights(cfg, tmp_path):
     assert not any(k.startswith("depth.") or k.startswith("code_emb") for k in loaded)
 
 
-def test_warm_start_dim_mismatch(cfg, tmp_path):
+@pytest.mark.parametrize("over,key", [({"d_model": 32}, "d_model"), ({"n_head": 4}, "n_head"),
+                                      ({"n_layer": 1}, "n_layer")])
+def test_warm_start_dim_mismatch(cfg, tmp_path, over, key):
     from llm.train.speech_loop import warm_start_from_text
 
-    _, path = _gpt_ckpt(tmp_path, cfg, d_model=32)
+    _, path = _gpt_ckpt(tmp_path, cfg, **over)
     model = SpeechGPT(cfg.model, cfg.audio, cfg.tokenizer.vocab_size + 4)
-    with pytest.raises(ValueError, match="tok_emb.weight|pos_emb.weight|blocks"):
+    before = {k: v.clone() for k, v in model.state_dict().items()}
+    with pytest.raises(ValueError, match=rf"^{key}:"):
         warm_start_from_text(model, path)
+    assert all(torch.equal(before[k], v) for k, v in model.state_dict().items())
 
 
 def test_warm_start_applied_at_fresh_start(tiny_config, tmp_path):

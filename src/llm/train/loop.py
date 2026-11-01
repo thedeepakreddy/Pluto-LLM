@@ -63,7 +63,7 @@ def resolve_precision(setting: str, device: torch.device) -> str:
     return setting
 
 
-def make_optimizer(model: GPT, cfg: TrainConfig) -> torch.optim.AdamW:
+def make_optimizer(model: torch.nn.Module, cfg: TrainConfig) -> torch.optim.AdamW:
     params = [p for p in model.parameters() if p.requires_grad]
     decay = [p for p in params if p.ndim >= 2]
     no_decay = [p for p in params if p.ndim < 2]
@@ -131,29 +131,59 @@ class _Wandb:
 
 # ------------------------------------------------------------------ trainer
 
-class Trainer:
+class BaseTrainer:
+    """Model-agnostic training machinery. Subclasses provide the model, data and evaluation:
+
+    - ``setup()``: load data sources (called before seeding and model construction);
+    - ``build_model() -> nn.Module``;
+    - ``next_batch(pos, micro) -> (batch, pos)`` where ``micro`` is the global micro-batch index;
+    - ``loss(batch) -> (loss tensor, parts dict)`` (forward under autocast);
+    - ``evaluate() -> dict`` holding at least ``val_loss``;
+    - ``provenance_inputs() -> dict[str, str]`` of manifest checksums;
+    - ``on_fresh_start()``: optional, called once when a run starts from scratch.
+    """
+
     def __init__(self, cfg: Config, run_dir: Path):
         self.cfg, self.t, self.run_dir = cfg, cfg.train, Path(run_dir)
         self.device = resolve_device(self.t.device)
         self.precision = resolve_precision(self.t.precision, self.device)
-        verify_shard_provenance(cfg)
-        ctx = cfg.model.context_length
-        self.train_chunks = TokenChunks(shard_dir(cfg), "train", ctx)
-        self.eval_chunks = TokenChunks(shard_dir(cfg), self.t.eval_split, ctx)
-        self.tok = BPETokenizer.load(tokenizer_dir(cfg))
+        self.setup()
 
         _seed_everything(self.t.seed)
-        self.model = GPT(cfg.model, cfg.tokenizer.vocab_size).to(self.device)
+        self.model = self.build_model().to(self.device)
         self.optimizer = make_optimizer(self.model, self.t)
         self.scaler = torch.amp.GradScaler("cuda") if self.precision == "fp16" else None
         self.fwd = torch.compile(self.model) if cfg.model.compile else self.model
         self.accum = grad_accum_steps(cfg)
         self.state = TrainState()
-        self.provenance = {"shards": manifest_checksum(shard_dir(cfg)),
-                           "tokenizer": manifest_checksum(tokenizer_dir(cfg)),
-                           "data": manifest_checksum(data_dir(cfg))}
+        self.provenance = self.provenance_inputs()
         self.cfg_dict = config_to_dict(cfg)
         self.metrics = self.run_dir / "metrics.jsonl"
+
+    # ---------------------------------------------------------- subclass hooks
+    def setup(self) -> None:
+        pass
+
+    def build_model(self) -> torch.nn.Module:
+        raise NotImplementedError
+
+    def next_batch(self, pos: DataPosition, micro: int) -> tuple[object, DataPosition]:
+        raise NotImplementedError
+
+    def loss(self, batch) -> tuple[torch.Tensor, dict[str, float]]:
+        raise NotImplementedError
+
+    def evaluate(self) -> dict:
+        raise NotImplementedError
+
+    def provenance_inputs(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def on_fresh_start(self) -> None:
+        pass
+
+    def autocast(self):
+        return _autocast(self.device, self.precision)
 
     # ---------------------------------------------------------- resume
     def resume(self, path: Path) -> None:
@@ -179,26 +209,27 @@ class Trainer:
                                self.provenance, self.cfg_dict, self.t.keep_last, is_best)
         maybe_upload(self.run_dir, path, self.t.hub_repo, is_best)
 
-    def _optimizer_step(self, pos: DataPosition) -> tuple[DataPosition, float, float, float] | str:
+    def _optimizer_step(self, pos: DataPosition) -> tuple[DataPosition, float, dict, float, float] | str:
         """One optimizer step over `accum` micro-batches.
 
-        Returns (position, loss, grad_norm, lr), or an error string if the loss or (without a
+        Returns (position, loss, mean loss parts, grad_norm, lr), or an error string if the loss or (without a
         GradScaler, which handles overflow itself) the gradients are non-finite; then no update
         is applied, so the last checkpoint stays clean."""
         lr = lr_at(self.state.step, self.t)
         for g in self.optimizer.param_groups:
             g["lr"] = lr
         loss_sum = 0.0
-        for _ in range(self.accum):
-            x, y, pos = next_batch(self.train_chunks, pos, self.t.micro_batch_size, self.t.seed)
-            x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
-            with _autocast(self.device, self.precision):
-                _, loss = self.fwd(x, y)
+        parts_sum: dict[str, float] = {}
+        for i in range(self.accum):
+            batch, pos = self.next_batch(pos, self.state.step * self.accum + i)
+            loss, parts = self.loss(batch)
             if not torch.isfinite(loss):
                 self.optimizer.zero_grad(set_to_none=True)
                 return "non-finite loss"
             loss = loss / self.accum
             loss_sum += loss.item()
+            for k, v in parts.items():
+                parts_sum[k] = parts_sum.get(k, 0.0) + v / self.accum
             (self.scaler.scale(loss) if self.scaler else loss).backward()
         if self.scaler:
             self.scaler.unscale_(self.optimizer)
@@ -212,16 +243,14 @@ class Trainer:
         else:
             self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
-        return pos, loss_sum, grad_norm, lr
+        return pos, loss_sum, parts_sum, grad_norm, lr
 
     def _evaluate(self, wb: _Wandb) -> None:
         s = self.state
-        ev = evaluate(self.model, self.eval_chunks, self.t.eval_batches, self.t.micro_batch_size, self.device,
-                      _autocast(self.device, self.precision))
-        pe = run_prompt_eval(self.model, self.tok, s.step, self.run_dir / "samples" / f"step_{s.step:08d}.jsonl")
-        rec = {"step": s.step, "type": "eval", "split": self.t.eval_split, **ev, **pe}
+        ev = self.evaluate()
+        rec = {"step": s.step, "type": "eval", **ev}
         append_jsonl(self.metrics, rec)
-        wb.log({"step": s.step, **{f"eval/{k}": v for k, v in {**ev, **pe}.items()}})
+        wb.log({"step": s.step, **{f"eval/{k}": v for k, v in ev.items()}})
         is_best = ev["val_loss"] < s.best_val_loss
         if is_best:
             s.best_val_loss = ev["val_loss"]
@@ -246,7 +275,7 @@ class Trainer:
                     if isinstance(result, str):
                         append_jsonl(self.metrics, {"step": s.step + 1, "type": "error", "reason": result})
                         return s, "nan"
-                    pos, loss, grad_norm, lr = result
+                    pos, loss, parts, grad_norm, lr = result
                     dt = time.time() - step_start
                     s.step += 1
                     s.tokens_seen += t.tokens_per_step
@@ -259,6 +288,8 @@ class Trainer:
                                "peak_mem_mb": torch.cuda.max_memory_allocated() / 2**20
                                if self.device.type == "cuda" else 0.0,
                                "elapsed_s": s.wall_time_s, "cost_usd": s.cost_usd}
+                        if parts:
+                            rec["parts"] = parts
                         append_jsonl(self.metrics, rec)
                         wb.log(rec)
 
@@ -280,6 +311,48 @@ class Trainer:
             wb.finish()
 
 
+class TextTrainer(BaseTrainer):
+    """The M1 text-only GPT trainer."""
+
+    def setup(self) -> None:
+        cfg = self.cfg
+        verify_shard_provenance(cfg)
+        ctx = cfg.model.context_length
+        self.train_chunks = TokenChunks(shard_dir(cfg), "train", ctx)
+        self.eval_chunks = TokenChunks(shard_dir(cfg), self.t.eval_split, ctx)
+        self.tok = BPETokenizer.load(tokenizer_dir(cfg))
+
+    def build_model(self) -> GPT:
+        return GPT(self.cfg.model, self.cfg.tokenizer.vocab_size)
+
+    def provenance_inputs(self) -> dict[str, str]:
+        cfg = self.cfg
+        return {"shards": manifest_checksum(shard_dir(cfg)),
+                "tokenizer": manifest_checksum(tokenizer_dir(cfg)),
+                "data": manifest_checksum(data_dir(cfg))}
+
+    def next_batch(self, pos: DataPosition, micro: int):
+        x, y, pos = next_batch(self.train_chunks, pos, self.t.micro_batch_size, self.t.seed)
+        return (x, y), pos
+
+    def loss(self, batch):
+        x, y = batch
+        x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+        with self.autocast():
+            _, loss = self.fwd(x, y)
+        return loss, {}
+
+    def evaluate(self) -> dict:
+        s = self.state
+        ev = evaluate(self.model, self.eval_chunks, self.t.eval_batches, self.t.micro_batch_size, self.device,
+                      self.autocast())
+        pe = run_prompt_eval(self.model, self.tok, s.step, self.run_dir / "samples" / f"step_{s.step:08d}.jsonl")
+        return {"split": self.t.eval_split, **ev, **pe}
+
+
+Trainer = TextTrainer  # M1 name
+
+
 def train(cfg: Config, run_dir: Path, resume: bool = False,
           stop_at_step: int | None = None) -> tuple[TrainState, str]:
     """Train (or resume) the run in run_dir. Returns the final state and why it stopped."""
@@ -294,7 +367,14 @@ def train(cfg: Config, run_dir: Path, resume: bool = False,
         diff = config_diff(saved, config_to_dict(cfg))
         if diff:
             raise ConfigError(f"config changed since the checkpoint was saved: {', '.join(diff)}")
-    trainer = Trainer(cfg, run_dir)
+    if cfg.audio is not None:
+        from llm.train.speech_loop import SpeechTrainer
+
+        trainer: BaseTrainer = SpeechTrainer(cfg, run_dir)
+    else:
+        trainer = TextTrainer(cfg, run_dir)
     if path is not None:
         trainer.resume(path)
+    else:
+        trainer.on_fresh_start()
     return trainer.run(stop_at_step)

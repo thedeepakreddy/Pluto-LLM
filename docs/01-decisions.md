@@ -50,3 +50,8 @@ until its milestone.
 - **Creator identity dataset (PCID v1.1):** used later for instruction tuning + evaluation
   (and retrieval), not pre-training. Contains personal details: kept out of the public repo
   until the creator decides which fields are public.
+- **Audio token layout: two levels (Moshi-style).** Mimi codec (12.5 frames/s × 8 codebooks).
+  The main Transformer ("brain") steps once per frame; a small depth Transformer ("voice box")
+  predicts the 8 codebook tokens of each frame. 8× shorter sequences than flattening; real-time
+  friendly; the same architecture Mini-Live builds on. First data: stories ≤ 30 s (~375 frames),
+  longer ones chunked.

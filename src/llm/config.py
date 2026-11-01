@@ -7,6 +7,7 @@ and invalid values are hard errors so typos never silently change an experiment.
 from __future__ import annotations
 
 import dataclasses
+import math
 import types
 import typing
 from dataclasses import dataclass, field
@@ -106,6 +107,44 @@ class RunConfig:
 
 
 @dataclass(frozen=True)
+class SpeechConfig:
+    """Synthetic-speech dataset recipe (M2). Optional; absent for text-only runs."""
+
+    name: str
+    version: int
+    voice: str = "bf_emma"
+    max_seconds: float = 30.0
+    hours: float = 200.0
+    val_chunks: int = 100
+    test_chunks: int = 200
+    qa_fraction: float = 0.02
+    qa_max_wer: float = 0.3
+    tts: str = "kokoro"
+    codec: str = "mimi"
+    asr: str = "whisper"
+    asr_model: str = "openai/whisper-small.en"
+    keep_wavs: int = 20
+    root: str = "speech"
+
+
+@dataclass(frozen=True)
+class AudioConfig:
+    """Audio-model (brain + depth "voice box") settings (M2). Optional; needs ``speech``."""
+
+    layout: Literal["aligned", "text_then_audio"] = "aligned"
+    codebooks: int = 8
+    codebook_size: int = 2048
+    acoustic_delay: int = 1
+    depth_layers: int = 3
+    depth_d_model: int = 192
+    depth_n_head: int = 8
+    code_loss_weights: tuple[float, ...] = (3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    text_loss_weight: float = 1.0
+    text_every: int = 10
+    init_from: str | None = None
+
+
+@dataclass(frozen=True)
 class Config:
     data: DataConfig
     tokenizer: TokenizerConfig
@@ -113,6 +152,12 @@ class Config:
     model: ModelConfig
     train: TrainConfig
     run: RunConfig
+    speech: SpeechConfig | None = None
+    audio: AudioConfig | None = None
+
+
+# Mimi codec frame rate (frames/s); 24 kHz audio / 1,920 samples per frame.
+MIMI_FRAME_RATE = 12.5
 
 
 # ---------------------------------------------------------------- construction
@@ -133,6 +178,10 @@ def _coerce(value: Any, tp: Any, key: str) -> Any:
             return None
         inner = [a for a in args if a is not type(None)]
         return _coerce(value, inner[0], key)
+    if origin is tuple and len(args) == 2 and args[1] is Ellipsis:
+        if not isinstance(value, (list, tuple)):
+            raise ConfigError(f"{key}: expected a list of values")
+        return tuple(_coerce(v, args[0], f"{key}[{i}]") for i, v in enumerate(value))
     if origin is tuple:
         if not isinstance(value, (list, tuple)) or len(value) != len(args):
             raise ConfigError(f"{key}: expected a list of {len(args)} values")
@@ -208,6 +257,56 @@ def _validate(cfg: Config) -> None:
         raise ConfigError("tokenizer.vocab_size must be >= 258 (256 bytes + 1 merge + <|endoftext|>)")
     if t.warmup_steps > t.max_steps:
         raise ConfigError("train.warmup_steps must be <= train.max_steps")
+    _validate_speech(cfg)
+
+
+def _validate_speech(cfg: Config) -> None:
+    sp, au = cfg.speech, cfg.audio
+    if sp is not None:
+        if sp.max_seconds <= 0:
+            raise ConfigError(f"speech.max_seconds must be > 0, got {sp.max_seconds}")
+        if sp.hours <= 0:
+            raise ConfigError(f"speech.hours must be > 0, got {sp.hours}")
+        for k in ("val_chunks", "test_chunks", "keep_wavs"):
+            if getattr(sp, k) < 0:
+                raise ConfigError(f"speech.{k} must be >= 0, got {getattr(sp, k)}")
+        if not 0.0 <= sp.qa_fraction <= 1.0:
+            raise ConfigError(f"speech.qa_fraction must be in [0, 1], got {sp.qa_fraction}")
+        if not 0.0 < sp.qa_max_wer <= 1.0:
+            raise ConfigError(f"speech.qa_max_wer must be in (0, 1], got {sp.qa_max_wer}")
+    if au is None:
+        return
+    if sp is None:
+        raise ConfigError("the audio section requires a speech section (audio.* needs speech.*)")
+    if au.codebooks < 1 or au.codebook_size < 1:
+        raise ConfigError("audio.codebooks and audio.codebook_size must be >= 1")
+    if au.acoustic_delay < 0:
+        raise ConfigError(f"audio.acoustic_delay must be >= 0, got {au.acoustic_delay}")
+    if au.depth_layers < 1:
+        raise ConfigError(f"audio.depth_layers must be >= 1, got {au.depth_layers}")
+    if au.depth_n_head < 1 or au.depth_d_model % au.depth_n_head != 0:
+        raise ConfigError(
+            f"audio.depth_d_model ({au.depth_d_model}) must be divisible by "
+            f"audio.depth_n_head ({au.depth_n_head})"
+        )
+    if len(au.code_loss_weights) != au.codebooks:
+        raise ConfigError(
+            f"audio.code_loss_weights has {len(au.code_loss_weights)} entries but "
+            f"audio.codebooks is {au.codebooks}"
+        )
+    if any(w < 0 for w in au.code_loss_weights) or au.text_loss_weight < 0:
+        raise ConfigError("audio.code_loss_weights and audio.text_loss_weight must be >= 0")
+    if au.text_every < 1:
+        raise ConfigError(f"audio.text_every must be >= 1, got {au.text_every}")
+    # one position per codec frame, plus the acoustic delay, plus BOS and END_AUDIO
+    need = math.ceil(sp.max_seconds * MIMI_FRAME_RATE) + au.acoustic_delay + 2
+    if need > cfg.model.context_length:
+        raise ConfigError(
+            f"model.context_length ({cfg.model.context_length}) is too small for "
+            f"speech.max_seconds={sp.max_seconds}: needs {need} positions "
+            f"(ceil({sp.max_seconds} * {MIMI_FRAME_RATE}) + audio.acoustic_delay "
+            f"{au.acoustic_delay} + 2)"
+        )
 
 
 def load_config_dict(raw: dict, overrides: typing.Iterable[str] = ()) -> Config:
@@ -234,7 +333,12 @@ def config_to_dict(cfg: Config) -> dict:
             return {k: conv(v) for k, v in x.items()}
         return x
 
-    return conv(dataclasses.asdict(cfg))
+    d = conv(dataclasses.asdict(cfg))
+    # Optional M2 sections are omitted when unset so M1 config dumps stay byte-identical.
+    for k in ("speech", "audio"):
+        if d.get(k) is None:
+            d.pop(k, None)
+    return d
 
 
 def grad_accum_steps(cfg: Config) -> int:

@@ -78,6 +78,25 @@ def _generate(args) -> int:
     return 0
 
 
+def _train_args(p: argparse.ArgumentParser) -> None:
+    config_args(p)
+    p.add_argument("--stop-at-step", type=int, default=None,
+                   help="save a checkpoint and stop after this step (to test interrupt/resume)")
+
+
+@command("train", "start a new training run", _train_args)
+def _train(args) -> int:
+    from llm.runs import create_run
+    from llm.train.loop import train
+
+    cfg = _load(args)
+    run_dir = create_run(cfg)
+    print(f"run: {run_dir}", flush=True)
+    state, reason = train(cfg, run_dir, stop_at_step=args.stop_at_step)
+    print(f"stopped: {reason} at step {state.step}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

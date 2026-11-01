@@ -54,6 +54,30 @@ def _tokenize(args) -> int:
     return 0
 
 
+def _generate_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("checkpoint", help="checkpoint .pt file or run directory")
+    p.add_argument("--prompt", required=True)
+    p.add_argument("--max-new-tokens", type=int, default=128)
+    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--top-k", type=int, default=50)
+    p.add_argument("--top-p", type=float, default=None)
+    p.add_argument("--repetition-penalty", type=float, default=1.0)
+    p.add_argument("--seed", type=int, default=None)
+
+
+@command("generate", "generate text from a checkpoint", _generate_args)
+def _generate(args) -> int:
+    from llm.generate import generate
+    from llm.train.checkpoint import load_model_for_inference
+
+    model, tok, _ = load_model_for_inference(args.checkpoint)
+    ids = generate(model, tok.encode(args.prompt), args.max_new_tokens, temperature=args.temperature,
+                   top_k=args.top_k, top_p=args.top_p, repetition_penalty=args.repetition_penalty,
+                   stop_ids=[tok.eot_id], seed=args.seed)
+    print(args.prompt + tok.decode(ids))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

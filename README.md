@@ -13,12 +13,29 @@ model that listens and talks back in real time, and longer term a model that can
 
 | Milestone | What | Status |
 |---|---|---|
-| M1 | Text pipeline end-to-end (this code) | built and tested on CPU; first GPU run pending |
+| M1 | Text pipeline end-to-end | ✅ done: [first run report](results/m1/m1-tinystories-20261101-205014-d0a9bc2/report.md) |
 | M2 | First voice model (~25M) on self-made TinyStories-Speech | next |
 | M3 | ~100M text "brain" on FineWeb-Edu | planned |
 | M4 | ~100M speech + text model | planned |
 | M5 | Real-time spoken dialogue (Mini-Live) | planned |
 | M6 | Autonomous research agent | planned |
+
+## Milestone 1 result (free Kaggle T4)
+
+A ~6M-parameter model trained from random weights on 197M tokens of TinyStories in **18 minutes**
+on a free T4 (~199k tokens/s), with a deliberate interruption at step 500 and an exact resume.
+
+| metric | value |
+|---|---:|
+| validation loss | 1.738 |
+| bits per byte | 0.640 |
+| perplexity (tokenizer-specific) | 5.69 |
+| 4-gram repetition in samples | 0.146 |
+
+Data finding: **15.1% of TinyStories (320,241 of 2,119,719 stories) are exact duplicates**, removed
+before splitting. Sample at step 3,000: *"Once upon a time, there was a little dog named Spot. Spot
+loved to play with his ball and run around in the park. One day, Spot saw a big, scary dog…"*
+Full report: [`results/m1/…/report.md`](results/m1/m1-tinystories-20261101-205014-d0a9bc2/report.md).
 
 ## What is built from scratch
 

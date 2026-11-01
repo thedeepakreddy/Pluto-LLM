@@ -45,9 +45,23 @@ def generate(model, prompt_ids: list[int], max_new_tokens: int, temperature: flo
         gen.manual_seed(seed)
     ids = list(prompt_ids)
     new: list[int] = []
+    # Models without forward_cached, or whose forward was replaced on the instance (wrappers,
+    # test doubles), take the plain full-recompute path.
+    use_cache = hasattr(model, "forward_cached") and "forward" not in vars(model)
+    cache = None  # per-layer KV for ids[:-1] while the whole sequence fits in the context
     for _ in range(max_new_tokens):
-        window = torch.tensor([ids[-ctx:]], dtype=torch.long, device=device)
-        logits, _ = model(window)
+        if use_cache and len(ids) <= ctx:
+            if cache is None:  # prefill the whole prompt
+                inp, start = ids, 0
+            else:  # one new token
+                inp, start = ids[-1:], len(ids) - 1
+            logits, cache = model.forward_cached(
+                torch.tensor([inp], dtype=torch.long, device=device), cache, start)
+        else:
+            # learned absolute positions: the window shifted, cached keys are stale -> recompute
+            cache = None
+            window = torch.tensor([ids[-ctx:]], dtype=torch.long, device=device)
+            logits, _ = model(window)
         logits = apply_repetition_penalty(logits[0, -1].float().cpu(), ids, repetition_penalty)
         if temperature == 0.0:
             nxt = int(torch.argmax(logits))

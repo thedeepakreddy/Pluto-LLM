@@ -158,6 +158,29 @@ def _pull_run(args) -> int:
     return 0
 
 
+def _build_speech_args(p: argparse.ArgumentParser) -> None:
+    config_args(p)
+    p.add_argument("--max-hours-session", type=float, default=None, metavar="H",
+                   help="stop cleanly after H wall-clock hours (re-run to resume)")
+
+
+@command("build-speech", "synthesize the speech dataset (resumable)", _build_speech_args)
+def _build_speech(args) -> int:
+    from llm.speech.build import build_speech_data
+    from llm.speech.interfaces import make_asr, make_codec, make_tts
+
+    cfg = _load(args)
+    if cfg.speech is None:
+        print("error: config has no speech section", file=sys.stderr)
+        return 2
+    budget = None if args.max_hours_session is None else args.max_hours_session * 3600
+    out, complete = build_speech_data(cfg, make_tts(cfg.speech), make_codec(cfg.speech),
+                                      make_asr(cfg.speech), max_seconds_this_session=budget,
+                                      progress=print)
+    print(f"{out}: {'complete' if complete else 'incomplete (re-run to resume)'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

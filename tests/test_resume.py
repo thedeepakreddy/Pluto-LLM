@@ -67,12 +67,31 @@ def test_resume_refuses_changed_config(cfg):
         train(load_config(run / "config.yaml"), run, resume=True)
 
 
-def test_resume_refuses_changed_tokenizer(cfg):
+def test_resume_after_rebuilding_identical_artifacts(cfg):
+    # A dead Kaggle session loses data/, tokenizer/, shards/: rebuilding them from the same
+    # source must be accepted, because only timestamps differ.
+    from llm.data.prepare import prepare_data
+
     run = create_run(cfg)
     train(cfg, run, stop_at_step=5)
-    train_tokenizer(cfg)
-    write_shards(cfg)
-    with pytest.raises(ProvenanceError, match="tokenizer"):
+    prepare_data(cfg), train_tokenizer(cfg), write_shards(cfg)
+    state, reason = train(cfg, run, resume=True)
+    assert reason == "max_steps" and state.step == 40
+
+
+def test_resume_refuses_changed_inputs(tiny_config, workspace, stories_path):
+    from llm.data.prepare import prepare_data
+
+    src = workspace / "stories_copy.jsonl"
+    src.write_text(stories_path.read_text())
+    edit_yaml(tiny_config, lambda d: d["data"]["source"].update(path=str(src)))
+    cfg, _ = run_pipeline(tiny_config)
+    run = create_run(cfg)
+    train(cfg, run, stop_at_step=5)
+    with open(src, "a") as f:
+        f.write(json.dumps({"text": "A brand new story about a purple whale who sang every night."}) + "\n")
+    prepare_data(cfg), train_tokenizer(cfg), write_shards(cfg)
+    with pytest.raises(ProvenanceError, match="data"):
         train(cfg, run, resume=True)
 
 
@@ -133,3 +152,23 @@ def test_cli_resume(cfg, workspace, tiny_config, capsys):
     run = next((workspace / "runs").iterdir())
     assert cli.main(["resume", str(run), "--stop-at-step", "6"]) == 0
     assert "stop_at_step at step 6" in capsys.readouterr().out
+
+
+def test_resume_refuses_changed_model_config_by_name(cfg):
+    run = create_run(cfg)
+    train(cfg, run, stop_at_step=5)
+    edit_yaml(run / "config.yaml", lambda d: d["model"].update(n_layer=3))
+    with pytest.raises(ConfigError, match="model.n_layer"):
+        train(load_config(run / "config.yaml"), run, resume=True)
+
+
+def test_wall_time_limit_is_per_session(tiny_config):
+    # Each Kaggle session gets the full budget: a resumed session must make progress
+    # even when the earlier sessions together already used more than the limit.
+    cfg, _ = run_pipeline(tiny_config, ["train.max_wall_time_s=1.0", "train.max_steps=100000",
+                                        "train.eval_every=100000", "train.ckpt_every=100000"])
+    run = create_run(cfg)
+    s1, r1 = train(cfg, run)
+    assert r1 == "wall_time" and s1.step > 0 and s1.wall_time_s >= 1.0
+    s2, r2 = train(cfg, run, resume=True)
+    assert r2 == "wall_time" and s2.step > s1.step

@@ -132,3 +132,23 @@ def test_cli_generate(prepared_tokenized, capsys):
     out1 = capsys.readouterr().out
     assert out1.startswith("Once upon a time") and len(out1) > len("Once upon a time")
     assert cli.main(args) == 0 and capsys.readouterr().out == out1
+
+
+def test_corrupt_latest_json_falls_back(tmp_path):
+    m, opt = _setup()
+    _save(tmp_path, m, opt, 1), _save(tmp_path, m, opt, 2)
+    (tmp_path / "checkpoints" / "latest.json").write_text('{"pa')
+    with pytest.warns(UserWarning, match="latest.json"):
+        assert find_latest_valid(tmp_path).name == "step_00000002.pt"
+
+
+def test_restore_cuda_rng_with_fewer_gpus(monkeypatch):
+    restored = []
+    state = get_rng_state()
+    state["cuda"] = [torch.zeros(16, dtype=torch.uint8), torch.ones(16, dtype=torch.uint8)]
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "set_rng_state", lambda s, device=0: restored.append(device))
+    monkeypatch.setattr(torch.cuda, "set_rng_state_all", lambda states: (_ for _ in ()).throw(IndexError("1")))
+    set_rng_state(state)
+    assert restored == [0]

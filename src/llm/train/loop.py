@@ -57,7 +57,9 @@ def resolve_precision(setting: str, device: torch.device) -> str:
             raise ConfigError(f"train.precision={setting} needs a CUDA GPU; use fp32 or auto on {device}")
         return "fp32"
     if setting == "auto":
-        return "bf16" if torch.cuda.is_bf16_supported() else "fp16"
+        # Native bf16 needs Ampere (sm80) or newer. torch.cuda.is_bf16_supported() also reports
+        # slow *emulated* bf16 on T4/P100, which the spec says must use fp16 + GradScaler instead.
+        return "bf16" if torch.cuda.get_device_capability(device)[0] >= 8 else "fp16"
     return setting
 
 
@@ -154,14 +156,8 @@ class Trainer:
         self.metrics = self.run_dir / "metrics.jsonl"
 
     # ---------------------------------------------------------- resume
-    def resume(self) -> None:
-        path = find_latest_valid(self.run_dir)
-        if path is None:
-            raise FileNotFoundError(f"no valid checkpoint to resume from in {self.run_dir / 'checkpoints'}")
+    def resume(self, path: Path) -> None:
         state, payload = load_checkpoint(path, self.model, self.optimizer, self.scaler)
-        diff = config_diff(payload["config"], self.cfg_dict)
-        if diff:
-            raise ConfigError(f"config changed since the checkpoint was saved: {', '.join(diff)}")
         changed = [k for k in self.provenance if payload["provenance"].get(k) != self.provenance[k]]
         if changed:
             raise ProvenanceError(f"inputs changed since the checkpoint was saved: {', '.join(changed)}")
@@ -170,13 +166,25 @@ class Trainer:
                      {"type": "resume", "step": state.step, "checkpoint": path.name, "at": time.time()})
 
     # ---------------------------------------------------------- pieces
+    def _account(self) -> None:
+        """Add real time since the last call (training, eval, checkpointing) to wall time and cost."""
+        now = time.time()
+        dt, self._tick = now - self._tick, now
+        self.state.wall_time_s += dt
+        self.state.cost_usd += dt / 3600 * self.t.cost_per_hour
+
     def checkpoint(self, is_best: bool = False) -> None:
+        self._account()
         path = save_checkpoint(self.run_dir, self.model, self.optimizer, self.scaler, self.state,
                                self.provenance, self.cfg_dict, self.t.keep_last, is_best)
-        maybe_upload(self.run_dir, path, self.t.hub_repo)
+        maybe_upload(self.run_dir, path, self.t.hub_repo, is_best)
 
-    def _optimizer_step(self, pos: DataPosition) -> tuple[DataPosition, float, float, float] | None:
-        """One optimizer step over `accum` micro-batches. Returns None on a non-finite loss."""
+    def _optimizer_step(self, pos: DataPosition) -> tuple[DataPosition, float, float, float] | str:
+        """One optimizer step over `accum` micro-batches.
+
+        Returns (position, loss, grad_norm, lr), or an error string if the loss or (without a
+        GradScaler, which handles overflow itself) the gradients are non-finite; then no update
+        is applied, so the last checkpoint stays clean."""
         lr = lr_at(self.state.step, self.t)
         for g in self.optimizer.param_groups:
             g["lr"] = lr
@@ -188,13 +196,16 @@ class Trainer:
                 _, loss = self.fwd(x, y)
             if not torch.isfinite(loss):
                 self.optimizer.zero_grad(set_to_none=True)
-                return None
+                return "non-finite loss"
             loss = loss / self.accum
             loss_sum += loss.item()
             (self.scaler.scale(loss) if self.scaler else loss).backward()
         if self.scaler:
             self.scaler.unscale_(self.optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.t.grad_clip).item()
+        if not self.scaler and not math.isfinite(grad_norm):
+            self.optimizer.zero_grad(set_to_none=True)
+            return "non-finite gradients"
         if self.scaler:
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -220,29 +231,27 @@ class Trainer:
     def run(self, stop_at_step: int | None = None) -> tuple[TrainState, str]:
         t, s = self.t, self.state
         pos = DataPosition(s.epoch, s.index)
-        session_start, wall_at_start = time.time(), s.wall_time_s
+        session_start = self._tick = time.time()
         wb = _Wandb(self.cfg, self.run_dir)
         self.model.train()
         try:
             with _StopFlag() as stop:
                 while s.step < t.max_steps:
-                    if t.max_wall_time_s is not None and \
-                            wall_at_start + time.time() - session_start >= t.max_wall_time_s:
+                    # Per session: each free-tier session gets the full budget before it is killed.
+                    if t.max_wall_time_s is not None and time.time() - session_start >= t.max_wall_time_s:
                         self.checkpoint()
                         return s, "wall_time"
                     step_start = time.time()
                     result = self._optimizer_step(pos)
-                    if result is None:
-                        append_jsonl(self.metrics, {"step": s.step + 1, "type": "error",
-                                                    "reason": "non-finite loss"})
+                    if isinstance(result, str):
+                        append_jsonl(self.metrics, {"step": s.step + 1, "type": "error", "reason": result})
                         return s, "nan"
                     pos, loss, grad_norm, lr = result
                     dt = time.time() - step_start
                     s.step += 1
                     s.tokens_seen += t.tokens_per_step
                     s.epoch, s.index = pos.epoch, pos.index
-                    s.wall_time_s += dt
-                    s.cost_usd += dt / 3600 * t.cost_per_hour
+                    self._account()
 
                     if s.step % t.log_every == 0 or s.step == 1:
                         rec = {"step": s.step, "tokens_seen": s.tokens_seen, "loss": loss, "lr": lr,
@@ -274,7 +283,18 @@ class Trainer:
 def train(cfg: Config, run_dir: Path, resume: bool = False,
           stop_at_step: int | None = None) -> tuple[TrainState, str]:
     """Train (or resume) the run in run_dir. Returns the final state and why it stopped."""
-    trainer = Trainer(cfg, run_dir)
+    path = None
     if resume:
-        trainer.resume()
+        path = find_latest_valid(Path(run_dir))
+        if path is None:
+            raise FileNotFoundError(f"no valid checkpoint to resume from in {Path(run_dir) / 'checkpoints'}")
+        # Compare configs *before* building anything, so an edited config is reported by key name
+        # instead of failing later as a shape mismatch or a missing file.
+        saved = torch.load(path, map_location="cpu", weights_only=True)["config"]
+        diff = config_diff(saved, config_to_dict(cfg))
+        if diff:
+            raise ConfigError(f"config changed since the checkpoint was saved: {', '.join(diff)}")
+    trainer = Trainer(cfg, run_dir)
+    if path is not None:
+        trainer.resume(path)
     return trainer.run(stop_at_step)

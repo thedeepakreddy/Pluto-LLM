@@ -124,7 +124,7 @@ def build_report(run_dir: Path) -> Path:
     L += ["", "## Tokenizer card", ""]
     if tm:
         L += [f"- Byte-level BPE, vocab {tm['extra']['vocab_size']:,}, trained on "
-              f"{tm['extra']['sample_bytes']:,} bytes in {tm['extra']['train_seconds']} s",
+              f"{tm['extra']['sample_bytes']:,} bytes in {tm.get('info', {}).get('train_seconds', '?')} s",
               f"- Compression: {tm['extra']['bytes_per_token']:.2f} bytes/token"]
     if sm:
         L.append("- Tokens: " + ", ".join(f"{k} {v['tokens']:,}" for k, v in sm["extra"]["splits"].items()))

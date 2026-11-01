@@ -90,3 +90,51 @@ def test_cli_train(tiny_config, workspace, capsys):
     assert cli.main(["train", str(tiny_config), "--set", "train.max_steps=5"]) == 0
     out = capsys.readouterr().out
     assert "max_steps" in out and str(workspace / "runs") in out
+
+
+@pytest.mark.parametrize("capability,expected", [((7, 5), "fp16"), ((6, 0), "fp16"), ((8, 0), "bf16")])
+def test_auto_precision_uses_hardware_bf16_only(monkeypatch, capability, expected):
+    # torch's is_bf16_supported() also counts slow emulated bf16 on T4/P100; we must not.
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: capability)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: True)
+    assert resolve_precision("auto", torch.device("cuda")) == expected
+
+
+def test_wall_time_and_cost_include_eval_and_checkpoint_time(prepared_tokenized):
+    import time
+
+    cfg, _ = prepared_tokenized
+    from llm.config import load_config_dict, config_to_dict
+    d = config_to_dict(cfg)
+    d["train"].update(cost_per_hour=3600.0, eval_every=10)  # $1 per second
+    cfg = load_config_dict(d)
+    run = create_run(cfg)
+    t0 = time.time()
+    state, _ = train(cfg, run)
+    elapsed = time.time() - t0
+    assert state.wall_time_s >= 0.8 * elapsed
+    assert math.isclose(state.cost_usd, state.wall_time_s, rel_tol=1e-6)
+
+
+def test_nonfinite_gradients_stop_without_poisoned_checkpoint(tiny_config, monkeypatch):
+    cfg, _ = run_pipeline(tiny_config, ["train.ckpt_every=5"])
+    real, calls = torch.nn.utils.clip_grad_norm_, {"n": 0}
+
+    def poison_after_5(params, max_norm, *a, **k):
+        params = list(params)
+        calls["n"] += 1
+        if calls["n"] > 5:
+            for p in params:
+                if p.grad is not None:
+                    p.grad.fill_(float("nan"))
+        return real(params, max_norm, *a, **k)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", poison_after_5)
+    run = create_run(cfg)
+    state, reason = train(cfg, run)
+    assert reason == "nan" and state.step == 5
+    rows = [json.loads(l) for l in (run / "metrics.jsonl").read_text().splitlines()]
+    assert rows[-1]["type"] == "error" and "gradient" in rows[-1]["reason"]
+    from llm.train.checkpoint import find_latest_valid
+    sd = torch.load(find_latest_valid(run), weights_only=True)["model"]
+    assert all(torch.isfinite(v).all() for v in sd.values())

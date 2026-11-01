@@ -29,6 +29,7 @@ class SourceConfig:
     max_docs: int | None = None
     license: str = "unknown"
     url: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True)

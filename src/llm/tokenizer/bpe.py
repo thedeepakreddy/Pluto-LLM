@@ -185,6 +185,6 @@ def train_tokenizer(cfg) -> Path:
     write_manifest(out, kind="tokenizer", name=cfg.tokenizer.name, version=cfg.tokenizer.version,
                    files=["tokenizer.json"], inputs={"data": manifest_checksum(ddir)},
                    extra={"vocab_size": tok.vocab_size, "sample_bytes": total,
-                          "train_seconds": round(seconds, 2),
-                          "bytes_per_token": len(probe.encode()) / max(1, len(tok.encode(probe)))})
+                          "bytes_per_token": len(probe.encode()) / max(1, len(tok.encode(probe)))},
+                   info={"train_seconds": round(seconds, 2)})
     return out

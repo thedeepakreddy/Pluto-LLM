@@ -21,3 +21,8 @@ real-time voice), see `docs/01-decisions.md`.
 - Paid GPU hard cap: $100 (target $40–80); log cost per run.
 - Disclose any off-the-shelf components (e.g. Mimi codec, Kokoro TTS) honestly.
 - Document failures and limitations openly.
+
+## Git rules
+- Never put session links (claude.ai/code URLs, "Claude-Session:" trailers) in commits, PR
+  descriptions, or any file in the repo. Commit trailer is only:
+  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`

@@ -41,3 +41,12 @@ This project is the foundation for our own frontier-class multimodal LLM that ca
 and text**. Vision is a future milestone after Mini-Live (M5). Architectural consequence today:
 modality-agnostic token streams and extensible vocab/embeddings; nothing vision-specific is built
 until its milestone.
+
+## M2 decisions (in progress, 2026-11-01)
+- **Task format: A.** Each training example is a story's text tokens followed by the same story's
+  audio tokens, in one sequence for one model. Teaches text→speech and spoken-story continuation;
+  the same text+audio design leads to Mini-Live.
+- **Repo/model name:** the project is now **Pluto** (repo `thedeepakreddy/Pluto-LLM`).
+- **Creator identity dataset (PCID v1.1):** used later for instruction tuning + evaluation
+  (and retrieval), not pre-training. Contains personal details: kept out of the public repo
+  until the creator decides which fields are public.

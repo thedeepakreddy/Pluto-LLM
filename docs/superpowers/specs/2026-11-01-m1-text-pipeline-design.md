@@ -1,0 +1,247 @@
+# Milestone 1 Design: From-Scratch Text Pipeline
+
+- **Date:** 2026-11-01
+- **Status:** Draft, awaiting review
+- **Scope:** Milestone 1 (M1) only. Later milestones get their own spec → plan → implementation cycle.
+- **Related:** `docs/00-codex-handoff.md` (original brief), `docs/01-decisions.md` (decision log), `CLAUDE.md` (north star)
+
+## 1. Context and goal
+
+The long-term goal is our own frontier-class multimodal LLM (see, talk, text). The near-term target
+is **Mini-Live**: a ~100M native speech+text model that listens and talks back in real time,
+built for a ≤$100 paid-GPU budget on top of free Colab/Kaggle compute.
+
+Every later milestone depends on a correct, reproducible training core. **M1 builds and proves that
+core on cheap text** (TinyStories), where bugs are easy to see.
+
+### Success criteria (M1 is done when)
+1. All tests (Section 7) pass in GitHub Actions CI on CPU.
+2. `m1-overfit` memorises its sample (training loss below threshold, Section 7).
+3. An `m1-tinystories` run (~6M params) on a free GPU, **interrupted at least once and resumed**,
+   produces a report whose samples are coherent short stories.
+4. The README reproduces the above with documented commands.
+
+### Non-goals for M1
+Audio/vision code, near-duplicate detection, PII/secret scanning, HellaSwag, FineWeb-Edu,
+multi-GPU training, modern architecture variants (RoPE/RMSNorm/SwiGLU), instruction tuning,
+web demo. These are scheduled for later milestones.
+
+### Forward-compatibility constraints (cheap now, expensive later)
+- Shards store token IDs with a manifest-declared dtype (`uint16` or `uint32`), so vocabularies
+  > 65,536 (audio codebooks, image tokens) need no redesign.
+- Vocabulary size, context length and all model dimensions come from config; nothing hardcoded.
+- The model and training loop consume generic token-ID streams; nothing assumes "text".
+
+## 2. Architecture and code layout
+
+Modular Python package with one CLI (`llm`); every run is defined by a YAML config.
+
+```
+LLM/
+├── pyproject.toml            # package + `llm` entry point
+├── configs/
+│   ├── m1-overfit.yaml
+│   └── m1-tinystories.yaml
+├── src/llm/
+│   ├── config.py             # YAML → typed dataclasses; unknown keys are errors
+│   ├── data/
+│   │   ├── sources.py        # download; record URL, license, date, checksum
+│   │   ├── clean.py          # filters + exact dedup; every removal counted with a reason
+│   │   └── split.py          # hash-based deterministic train/val/test split
+│   ├── tokenizer/
+│   │   └── bpe.py            # byte-level BPE: train / encode / decode / save / load
+│   ├── shards.py             # token shards (.bin) + manifest.json; resumable reader
+│   ├── model/
+│   │   └── gpt.py            # decoder-only Transformer
+│   ├── train/
+│   │   ├── loop.py           # training loop
+│   │   └── checkpoint.py     # full-state save/load
+│   ├── eval/
+│   │   ├── metrics.py        # val loss, bits-per-byte, perplexity, repetition
+│   │   └── prompts.py        # frozen, versioned prompt set + sampling settings
+│   ├── generate.py           # sampling
+│   ├── runs.py               # run dir, run ID, git SHA, hardware, cost
+│   ├── report.py             # report + compare
+│   └── cli.py
+├── tests/
+├── data/ tokenizers/ shards/ runs/   # git-ignored artifacts; synced to Hugging Face Hub
+└── .github/workflows/ci.yml
+```
+
+Dependencies: `torch` (2.x), `numpy`, `pyyaml`, `datasets` (download only), `matplotlib` (report
+charts), `pytest`; optional `wandb`, `huggingface_hub`. **No** HF Transformers, Lightning, Hydra,
+or third-party tokenizer libraries in the core.
+
+Guideline: modules stay small and single-purpose; a file growing past ~300 lines is a signal to split.
+
+### CLI commands and data flow
+
+| Command | Inputs | Outputs |
+|---|---|---|
+| `llm prepare-data <cfg>` | source spec | `data/<name>-v<k>/{train,val,test}.jsonl`, `data_report.md`, `manifest.json` |
+| `llm train-tokenizer <cfg>` | train split | `tokenizers/<name>-v<k>/{vocab,merges}.json`, `manifest.json` |
+| `llm tokenize <cfg>` | splits + tokenizer | `shards/<name>-v<k>/{train,val,test}_*.bin`, `manifest.json` |
+| `llm train <cfg>` | config + shards | `runs/<run_id>/{config.yaml, metrics.jsonl, checkpoints/, samples/}` |
+| `llm resume <run_dir>` | run dir | continues the same run dir |
+| `llm generate <ckpt> --prompt ...` | checkpoint | text to stdout |
+| `llm report <run_dir>` | run dir | `report.md` + PNG charts |
+| `llm compare <run_a> <run_b>` | two run dirs | comparison table + overlaid charts |
+
+### Provenance rule
+Every artifact has a `manifest.json` with its version, creation time, git SHA, and checksums of
+its inputs' manifests. Downstream steps verify upstream checksums; **a mismatch is a hard error**,
+never a warning.
+
+## 3. Data (M1)
+
+- **Source:** `roneneldan/TinyStories` (Hugging Face), license CDLA-Sharing-1.0. The data report
+  records that the stories are synthetic (generated by GPT-3.5/GPT-4).
+- **Cleaning (M1 level):** UTF-8 validation, whitespace normalisation (NFC, trimmed), length
+  filters (min/max characters, configurable), exact deduplication by hash of the normalised text.
+  Every dropped document increments a named counter; counts must sum to the input total.
+- **Split:** deterministic by `hash(normalised_text) mod 1000` against configured ratios
+  (default 98 / 1 / 1). Split happens **after** dedup. The test split is not read anywhere in M1
+  except by tests of the split itself.
+- **Data report:** source, URL, license, download date, document counts before and after each
+  filter with reasons, split sizes, total bytes.
+
+## 4. Tokenizer
+
+- Our own **byte-level BPE**: the base alphabet is the 256 byte values (no unknown tokens),
+  plus a regex pre-tokenisation step (GPT-2 style split on words, numbers, punctuation and
+  whitespace) and one special token `<|endoftext|>`.
+- Training counts unique pre-tokenised chunks and performs merges over those counts
+  (deterministic tie-breaking by lowest pair ID), so training on a ~100 MB sample is practical
+  in pure Python.
+- Vocabulary size is a config value (M1: 512 for overfit, 4096 for TinyStories).
+- Saved as JSON (merges + vocab) with a checksum. Frozen per model family.
+- Encoding speed is measured and reported. A faster encoder is added only if measurement
+  shows it is the bottleneck (expected to matter at FineWeb scale in M3, not in M1).
+
+## 5. Model
+
+GPT-2-style decoder-only Transformer as the measured baseline. Modern variants are deferred to M3
+as one-at-a-time ablations.
+
+```
+tokens [B,T] → tok_emb (V×d) + pos_emb (T_max×d)
+  → N × [ x = x + Attn(LN(x));  x = x + MLP(LN(x)) ]     # pre-LN, MLP d→4d→GELU→d
+  → LN → lm_head (weight-tied to tok_emb) → logits [B,T,V]
+loss = CE(logits[:, :-1], tokens[:, 1:])
+```
+
+- Attention fast path: `torch.nn.functional.scaled_dot_product_attention(is_causal=True)`.
+  A manual reference attention (QKᵀ/√d → causal mask → softmax → ·V) exists for tests and
+  for readability.
+- Init: normal(0, 0.02); residual output projections scaled by 1/√(2N).
+- Dropout configurable, default 0. Optional `torch.compile` flag (off in tests).
+- Documents are packed into fixed-length sequences separated by `<|endoftext|>`; no padding.
+- Reports parameter count with and without embeddings.
+
+| Config | Layers | d | Heads | Context | Vocab | Params | Purpose |
+|---|---|---|---|---|---|---|---|
+| `m1-overfit` | 2 | 64 | 2 | 64 | 512 | ~0.1M | Memorise ~20 stories on CPU |
+| `m1-tinystories` | 6 | 256 | 8 | 256 | 4096 | ~6M | Coherent stories; ~100–200M training tokens on a free T4 |
+
+## 6. Training, checkpointing and resume
+
+### Training loop
+- AdamW, β = (0.9, 0.95), weight decay 0.1 on tensors with ≥2 dims only.
+- Linear warmup, then cosine decay to 10% of the peak learning rate.
+- Gradient clipping at 1.0. Gradient accumulation derived from a configured tokens-per-step target.
+- Precision `auto`: bf16 autocast if the GPU supports it; otherwise fp16 autocast + `GradScaler`
+  (T4/P100); fp32 on CPU. Overridable in config.
+- Non-finite loss: stop, keep the last good checkpoint, log the reason. Never continue silently.
+
+### Deterministic data order
+Token shards are viewed as fixed-length chunks. Each epoch uses a permutation seeded by
+`(seed, epoch)`. The data position is `(epoch, index)`, so resume jumps directly to it.
+
+### Checkpoint contents
+Model weights; optimizer state; GradScaler state; scheduler step; global step; tokens seen;
+data position `(epoch, index)`; RNG states (Python, NumPy, torch CPU, CUDA if present); full
+resolved config; data/tokenizer/shard manifest checksums; git SHA and a dirty flag; accumulated
+wall time and cost.
+
+### Saving rules
+- Atomic: write to a temp file, then `os.replace`.
+- `checkpoints/latest.json` points to the newest checkpoint. Keep the last K (config) plus the
+  best by validation loss.
+- Optional upload to Hugging Face Hub after each save.
+
+### Free-tier survival
+- `max_wall_time` config (e.g. 11.5 h on Kaggle) plus a SIGTERM/SIGINT handler: save a
+  checkpoint and exit cleanly before the platform kills the session.
+- `llm resume <run_dir>` loads the latest valid checkpoint, verifies config and version
+  compatibility (refuses on mismatch), and continues. Each resume is appended to the run's
+  resume log.
+
+### Resume guarantee
+An interrupted-and-resumed run equals an uninterrupted run: **bitwise on CPU**, and within a
+documented tolerance on GPU (some kernels are non-deterministic).
+
+### Logging
+- `metrics.jsonl` every `log_every` steps: step, tokens, train loss, LR, grad norm, tokens/s,
+  peak GPU memory, elapsed time, estimated cost (`hardware.cost_per_hour` × time; free tier = 0).
+- Every `eval_every` steps: validation loss, bits-per-byte, and frozen-prompt samples to
+  `samples/step_<n>.jsonl`.
+- Optional mirror to Weights & Biases. Local files are the source of truth.
+
+## 7. Testing
+
+Test-driven. Fast unit tests run on CPU in under ~1 minute on every commit; slow integration
+tests run on CPU in a few minutes. Both run in GitHub Actions.
+
+| Area | Tests |
+|---|---|
+| Tokenizer | `decode(encode(x)) == x` over random Unicode, emoji, code, numbers, whitespace, empty string; deterministic training (same checksum); compression in a sane range |
+| Data | dedup correctness and removal counts sum to the input total; split is deterministic and disjoint; shard write/read round-trip; manifest mismatch is a hard error; same seed gives the same batch order; resuming from `(epoch, index)` gives the identical remaining order |
+| Model | output shape `[B,T,V]`; parameter count matches formula; causal mask (perturbing token t leaves positions < t unchanged); SDPA equals manual attention within tolerance; initial loss ≈ ln(V) |
+| Training | overfit `m1-overfit` to loss < 0.1 within a step budget; save/reload gives identical outputs; interrupted+resumed equals uninterrupted (bitwise, CPU); two same-seed runs give identical losses (CPU); fp16 + GradScaler path runs without NaN; injected NaN stops training and keeps the last good checkpoint |
+| Generation | same seed and settings give identical output; temperature 0 is greedy; top-k/top-p only sample allowed tokens; stops at the stop token and at max length |
+| End-to-end (slow) | prepare-data → train-tokenizer → tokenize → train (overfit) → interrupt → resume → generate → report, in a temp dir |
+
+A short GPU smoke-test notebook (Colab/Kaggle) covers the bf16/fp16 code paths on real hardware.
+
+## 8. Evaluation and reporting
+
+### Metrics
+- Validation loss (validation split only; the test split is reserved for final claims).
+- **Bits-per-byte** = total loss in bits ÷ UTF-8 bytes of the source text (comparable across
+  tokenizers and, later, modalities).
+- Perplexity (reported, flagged as tokenizer-dependent).
+- Repetition score: fraction of repeated token 4-grams in generations.
+
+### Frozen prompt set
+About 10 TinyStories-style openings, versioned in `eval/prompts.py`. Fixed settings: one greedy
+sample, plus one sample at temperature 0.8, top-k 50, seed 1234; max 128 new tokens. Changing the
+prompts or settings bumps the version; comparisons are only made within a version.
+
+### `llm report <run_dir>` → `report.md` + PNGs
+1. Run card: run ID, git SHA, config, all manifest versions and checksums, hardware, wall time, cost.
+2. Data card: sources, licenses, filter counts with reasons, split sizes.
+3. Tokenizer card: vocabulary size, bytes/token, round-trip status.
+4. Charts: train/val loss, BPB, LR, grad norm, throughput, against steps and tokens.
+5. Results table: final and best val loss, BPB, perplexity, repetition.
+6. Sample progression: each frozen prompt at early, middle and final checkpoints.
+7. Resume log.
+8. Known limitations: hand-written and required (the command warns if it is empty).
+
+### `llm compare <run_a> <run_b>`
+Side-by-side results table and overlaid curves. This is the primitive for every later
+baseline-vs-change experiment and for the M6 research agent.
+
+## 9. Compute and cost
+M1 runs entirely on CPU and the free tier (Colab/Kaggle). Expected paid spend for M1: **$0**.
+The `m1-tinystories` run is estimated at ~15–30 minutes on a T4. This estimate will be replaced
+by the measured value in the report.
+
+## 10. Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Pure-Python BPE too slow | Train on a sample; measure encode throughput; add a fast path only if needed |
+| GPU non-determinism breaks the resume test | Bitwise guarantee on CPU; documented tolerance on GPU |
+| fp16 instability on T4 | GradScaler, NaN guard, dedicated test + GPU smoke notebook |
+| Free-tier session killed mid-save | Atomic saves, wall-time guard, signal handler, Hub upload |
+| Over-engineering for future modalities | Only dtype/vocab/config flexibility now; no audio/vision code in M1 |

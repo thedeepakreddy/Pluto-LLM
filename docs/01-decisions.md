@@ -35,3 +35,9 @@ Value shown: from-scratch engineering, research discipline, honest measured clai
 - **Budget:** free tier first; **$100 hard cap** on paid GPUs (target $40–80), every dollar logged.
   Rules: no debugging on paid GPUs, ablations at 10–25M on free tier, auto-shutdown, resumable runs.
 - **Free-tier GPUs (T4/P100) lack bf16:** fp16 + loss scaling must be supported and tested.
+
+## Long-term vision (added 2026-11-01)
+This project is the foundation for our own frontier-class multimodal LLM that can **see, talk,
+and text**. Vision is a future milestone after Mini-Live (M5). Architectural consequence today:
+modality-agnostic token streams and extensible vocab/embeddings; nothing vision-specific is built
+until its milestone.

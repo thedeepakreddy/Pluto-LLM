@@ -87,3 +87,24 @@ def run_pipeline(config_path: Path, overrides=()):
 @pytest.fixture
 def prepared_tokenized(tiny_config):
     return run_pipeline(tiny_config)
+
+
+SPEECH_FAKE = {"tts": "fake", "codec": "fake", "asr": "fake", "hours": 0.02, "val_chunks": 3,
+               "test_chunks": 3, "qa_fraction": 0.0, "keep_wavs": 2}
+
+
+def setup_speech_config(tiny_config: Path, speech=None, stories=None, audio=None):
+    """Run the M1 pipeline on the tiny fixture with val/test docs and a fake-backed speech section
+    (plus an ``audio`` section when given); returns the loaded Config. Shared by the speech tests."""
+
+    def fn(d):
+        d["data"]["split"] = {"train": 0.6, "val": 0.2, "test": 0.2}
+        d["speech"] = {"name": "tiny-speech", "version": 1, **SPEECH_FAKE, **(speech or {})}
+        if audio is not None:
+            d["audio"] = audio
+        if stories is not None:
+            d["data"]["source"]["path"] = str(stories)
+
+    edit_yaml(tiny_config, fn)
+    cfg, _ = run_pipeline(tiny_config)
+    return cfg

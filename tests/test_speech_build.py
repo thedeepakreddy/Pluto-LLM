@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import edit_yaml, run_pipeline
+from conftest import SPEECH_FAKE, edit_yaml, run_pipeline, setup_speech_config
 
 from llm.config import load_config
 from llm.manifest import manifest_checksum, read_manifest, verify_files
@@ -13,20 +13,11 @@ from llm.speech.fakes import FakeASR, FakeCodec, FakeTTS
 from llm.speech.interfaces import Transcript
 
 K = 8
-SPEECH = {"tts": "fake", "codec": "fake", "asr": "fake", "hours": 0.02, "val_chunks": 3,
-          "test_chunks": 3, "qa_fraction": 0.0, "keep_wavs": 2}
+SPEECH = SPEECH_FAKE
 
 
 def _setup(tiny_config, speech=None, stories=None):
-    def fn(d):
-        d["data"]["split"] = {"train": 0.6, "val": 0.2, "test": 0.2}
-        d["speech"] = {"name": "tiny-speech", "version": 1, **SPEECH, **(speech or {})}
-        if stories is not None:
-            d["data"]["source"]["path"] = str(stories)
-
-    edit_yaml(tiny_config, fn)
-    cfg, _ = run_pipeline(tiny_config)
-    return cfg
+    return setup_speech_config(tiny_config, speech=speech, stories=stories)
 
 
 @pytest.fixture

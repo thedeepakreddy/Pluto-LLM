@@ -51,6 +51,31 @@ def _never_end(model, sp):
     def fn(logits, i):
         logits[..., sp.end_audio] = -1e9
     model.text_head = _HeadOverride(model.text_head, fn)
+    orig = model.depth.sample
+
+    def sample(*a, allow_stop=True, force_stop=False, **k):
+        return orig(*a, allow_stop=False, force_stop=force_stop, **k)
+
+    model.depth.sample = sample
+
+
+def _stop_at(model, frame_n):
+    """Voice box samples "stop audio" (codebook 0 EMPTY) at its call for frame ``frame_n``
+    (calls are counted only while stopping is allowed or forced; returns the call log)."""
+    orig = model.depth.sample
+    calls = []
+
+    def sample(*a, allow_stop=True, force_stop=False, **k):
+        out = orig(*a, allow_stop=False, force_stop=force_stop, **k)
+        calls.append((allow_stop, force_stop))
+        if len(calls) - 1 == frame_n:
+            assert allow_stop
+            out = out.clone()
+            out[0] = EMPTY
+        return out
+
+    model.depth.sample = sample
+    return calls
 
 
 def _spy_steps(model):
@@ -101,30 +126,72 @@ def test_speak_places_all_tokens_aligned(tok):
     sp = special_ids(tok.vocab_size)
     ids = tok.encode(TEXT)
 
-    def fn(logits, i):  # alternate: PAD wins on even calls, the non-PAD candidate on odd ones
+    def fn(logits, i):  # alternate: PAD wins on even calls, the next token on odd ones
         logits[..., sp.pad_text] = 1e9 if i % 2 == 0 else -1e9
 
     m.text_head = _HeadOverride(m.text_head, fn)
+    calls = []
+    orig = m.depth.sample
+
+    def sample(*a, allow_stop=True, force_stop=False, **k):
+        calls.append(allow_stop)
+        return orig(*a, allow_stop=False, force_stop=force_stop, **k)
+
+    m.depth.sample = sample
     fed = _spy_steps(m)
-    codes = speak(m, TEXT, tok, audio, SAMPLING, max_frames=200)
+    speak(m, TEXT, tok, audio, SAMPLING, max_frames=200)
     slots = [t for t, _, _ in fed]
     assert slots[0] == sp.bos
     assert [t for t in slots if t < tok.vocab_size] == ids  # every token once, in order
     assert set(slots[1:]) <= set(ids) | {sp.pad_text}
-    # END_AUDIO was chosen right after the last token's PAD, long before max_frames
-    assert len(fed) < 200
-    # positions: every fed frame position carries codebook 0; the last `delay` positions before
-    # END_AUDIO are flush positions, so frames = fed frame positions - delay
-    assert codes.shape == (len(fed) - 1 - audio.acoustic_delay, K)
-    # returned codes are the de-delayed frames: codebook 0 of frame f was fed at position f + 1,
-    # codebooks 1.. of frame f at position f + 1 + delay
-    d = audio.acoustic_delay
-    for f in range(codes.shape[0]):
-        assert fed[f + 1][1][0] == codes[f, 0]
-        assert fed[f + 1 + d][1][1:] == codes[f, 1:].tolist()
-    # the first `delay` frame positions have no later-codebook content yet
-    for p in range(1, 1 + d):
-        assert fed[p][1][1:] == [EMPTY] * (K - 1)
+    # stopping is masked until the last token is placed (at fed position 2 * len(ids))
+    last_tok = 2 * len(ids)
+    assert slots[last_tok] == ids[-1]
+    assert not any(calls[: last_tok]) and all(calls[last_tok:200])
+
+
+@pytest.mark.parametrize("layout", ["aligned", "text_then_audio"])
+@pytest.mark.parametrize("delay", [1, 2])
+def test_speak_stop_audio_matches_training_layout(tok, layout, delay):
+    m, audio = _model(tok, layout=layout, delay=delay)
+    sp = special_ids(tok.vocab_size)
+    ids = tok.encode(TEXT)
+    n_stop = len(ids) + 3  # frames before the voice box says "stop audio"
+
+    def fn(logits, i):  # place a token whenever possible; prefer END_AUDIO over PAD
+        logits[..., sp.pad_text] = -1e9
+        logits[..., sp.end_audio] = 1e9
+
+    m.text_head = _HeadOverride(m.text_head, fn)
+    calls = _stop_at(m, n_stop)
+    fed = _spy_steps(m)
+    codes = speak(m, TEXT, tok, audio, SAMPLING, max_frames=100)
+    assert codes.shape == (n_stop, K)
+    # the delay-1 later flush positions are forced to stop
+    assert [f for _, f in calls[n_stop + 1:]] == [True] * (delay - 1)
+    assert len(calls) == n_stop + delay
+    # the fed sequence equals the training layout of the returned codes, minus END_AUDIO
+    if layout == "aligned":
+        from llm.speech.layout import build_aligned
+        ex = build_aligned(ids, list(range(1, len(ids) + 1)), codes, sp, delay)
+    else:
+        from llm.speech.layout import build_text_then_audio
+        ex = build_text_then_audio(ids, codes, sp, delay)
+    assert [t for t, _, _ in fed] == ex.text[:-1].tolist()
+    assert np.array_equal(np.array([c for _, c, _ in fed]), ex.codes[:-1])
+    assert len(fed) == len(ex.text) - 1
+
+
+def test_speak_stops_after_flush_even_if_pad_preferred(tok):
+    m, audio = _model(tok, layout="text_then_audio")
+    sp = special_ids(tok.vocab_size)
+
+    def fn(logits, i):
+        logits[..., sp.end_audio] = -1e9
+
+    m.text_head = _HeadOverride(m.text_head, fn)
+    _stop_at(m, 4)
+    assert speak(m, TEXT, tok, audio, SAMPLING, max_frames=50).shape == (4, K)
 
 
 @pytest.mark.parametrize("delay", [0, 1, 2])
@@ -170,22 +237,6 @@ def test_speak_baseline_layout_runs(tok):
     assert slots[: len(ids) + 2] == [sp.bos, *ids, sp.audio]
     assert set(slots[len(ids) + 2:]) == {sp.pad_text}
     assert all(c == [EMPTY] * K for _, c, _ in fed[: len(ids) + 2])
-
-
-def test_speak_baseline_stops_when_end_preferred(tok):
-    m, audio = _model(tok, layout="text_then_audio")
-    sp = special_ids(tok.vocab_size)
-    n_prefix = len(tok.encode(TEXT)) + 2
-
-    def fn(logits, i):  # END_AUDIO beats PAD from the 6th frame decision on
-        logits[..., sp.end_audio] = 1e9 if i >= 5 else -1e9
-
-    m.text_head = _HeadOverride(m.text_head, fn)
-    fed = _spy_steps(m)
-    codes = speak(m, TEXT, tok, audio, SAMPLING, max_frames=50)
-    # decisions 0..4 chose PAD -> 5 frame positions; the last `delay` of them are flush positions
-    assert len(fed) == n_prefix + 5
-    assert codes.shape == (5 - audio.acoustic_delay, K)
 
 
 @pytest.mark.parametrize("layout", ["aligned", "text_then_audio"])

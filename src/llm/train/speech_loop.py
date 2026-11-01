@@ -37,7 +37,14 @@ def warm_start_from_text(model: SpeechGPT, ckpt: Path) -> list[str]:
     ``tok_emb`` rows ``0..V-1`` (V = model text vocab - 4; the special rows keep their init).
     The tied ``lm_head`` is skipped. Any shape mismatch raises ``ValueError`` naming the key.
     """
-    src = torch.load(ckpt, map_location="cpu", weights_only=True)["model"]
+    payload = torch.load(ckpt, map_location="cpu", weights_only=True)
+    saved = (payload.get("config") or {}).get("model")
+    if not saved:
+        raise ValueError(f"{ckpt}: no config.model in the checkpoint; cannot verify n_layer/d_model/n_head")
+    for key in ("n_layer", "d_model", "n_head"):
+        if saved.get(key) != getattr(model.cfg, key):
+            raise ValueError(f"{key}: checkpoint {saved.get(key)} vs speech model {getattr(model.cfg, key)}")
+    src = payload["model"]
     dst = model.state_dict()
     V = model.text_vocab - 4
     loaded: list[str] = []

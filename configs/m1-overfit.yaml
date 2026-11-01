@@ -1,0 +1,42 @@
+# M1 sanity check: a ~0.1M model must memorise 20 TinyStories.
+# Run: llm prepare-data configs/m1-overfit.yaml && llm train-tokenizer configs/m1-overfit.yaml
+#      && llm tokenize configs/m1-overfit.yaml && llm train configs/m1-overfit.yaml
+data:
+  name: tinystories-20
+  version: 1
+  source:
+    type: hf
+    path: roneneldan/TinyStories
+    split: train
+    max_docs: 20
+    license: CDLA-Sharing-1.0
+    url: https://huggingface.co/datasets/roneneldan/TinyStories
+  split: {train: 1.0, val: 0.0, test: 0.0}
+tokenizer:
+  name: tinystories-20-bpe
+  version: 1
+  vocab_size: 512
+shards:
+  name: tinystories-20-shards
+  version: 1
+model:
+  n_layer: 2
+  d_model: 64
+  n_head: 2
+  context_length: 64
+train:
+  seed: 1337
+  tokens_per_step: 512
+  micro_batch_size: 8
+  max_steps: 1500
+  lr: 0.003
+  warmup_steps: 20
+  precision: fp32
+  device: auto
+  log_every: 10
+  eval_every: 500
+  eval_batches: 4
+  eval_split: train
+  ckpt_every: 500
+run:
+  name: m1-overfit

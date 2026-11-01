@@ -1,0 +1,42 @@
+# M1 first real model: ~6M parameters on TinyStories, sized for a free Kaggle/Colab GPU.
+data:
+  name: tinystories
+  version: 1
+  source:
+    type: hf
+    path: roneneldan/TinyStories
+    split: train
+    license: CDLA-Sharing-1.0
+    url: https://huggingface.co/datasets/roneneldan/TinyStories
+  split: {train: 0.98, val: 0.01, test: 0.01}
+tokenizer:
+  name: tinystories-bpe
+  version: 1
+  vocab_size: 4096
+  train_sample_bytes: 100000000
+shards:
+  name: tinystories-shards
+  version: 1
+model:
+  n_layer: 6
+  d_model: 256
+  n_head: 8
+  context_length: 256
+train:
+  seed: 1337
+  tokens_per_step: 65536
+  micro_batch_size: 64
+  max_steps: 3000
+  lr: 0.001
+  warmup_steps: 200
+  precision: auto
+  device: auto
+  log_every: 10
+  eval_every: 250
+  eval_batches: 20
+  eval_split: val
+  ckpt_every: 250
+  max_wall_time_s: 41400   # 11.5 h: save and exit before Kaggle's 12 h limit
+  cost_per_hour: 0.0       # free tier; set the real $/h on rented GPUs
+run:
+  name: m1-tinystories

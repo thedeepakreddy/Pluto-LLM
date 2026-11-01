@@ -1,0 +1,9 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+/data/
+/tokenizers/
+/shards/
+/runs/
+wandb/

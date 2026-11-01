@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm"
+version = "0.1.0"
+description = "A from-scratch, reproducible language-model training system (toward Mini-Live)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "numpy",
+    "pyyaml",
+    "regex",
+    "datasets",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+hub = ["huggingface_hub"]
+wandb = ["wandb"]
+
+[project.scripts]
+llm = "llm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["slow: integration tests that take more than a few seconds"]

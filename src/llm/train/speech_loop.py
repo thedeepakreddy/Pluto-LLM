@@ -14,18 +14,12 @@ from llm.model.voice import SpeechGPT
 from llm.shards import DataPosition, TokenChunks, shard_dir, verify_shard_provenance
 from llm.speech.build import _wav_bytes, speech_dir
 from llm.speech.dataset import SpeechShards, next_speech_batch
+from llm.speech.evaluate import DEMO_SENTENCES
 from llm.speech.generate import SpeechSampling, speak
 from llm.speech.layout import special_ids
 from llm.tokenizer.bpe import BPETokenizer, tokenizer_dir
 from llm.train.loop import BaseTrainer
 
-# Placeholder demo sentences spoken at each evaluation. Task 11 replaces these with the frozen
-# speech-demo-v1 set. Kept short so they fit tiny test contexts.
-DEMO_SENTENCES = [
-    "Hello there.",
-    "The cat sat on the mat.",
-    "I like to read books.",
-]
 
 EVAL_SPLIT = "val"
 

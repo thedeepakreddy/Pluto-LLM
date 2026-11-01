@@ -89,6 +89,37 @@ def _manifest_or_none(d: Path) -> dict | None:
         return None
 
 
+def _speech_section(run_dir: Path) -> list[str]:
+    path = run_dir / "speech_eval.json"
+    if not path.exists():
+        return []
+    d = json.loads(path.read_text())
+    L = ["", "## Speech", "", f"Whisper-scored on {d['model']['n']} held-out test chunks "
+         f"(checkpoint `{d.get('checkpoint', '?')}`). Ceiling = reference codes through the same "
+         "codec + ASR; floor = freshly initialised model (seed 0).", "",
+         "| system | WER | CER | duration ratio | RTF |", "|---|---:|---:|---:|---:|"]
+    c = d.get("ceiling")
+    if c:
+        L.append(f"| ceiling | {c['wer']:.3f} | {c['cer']:.3f} | - | - |")
+    for name in ("model", "floor"):
+        r = d.get(name)
+        if r:
+            L.append(f"| {name} | {r['wer']:.3f} | {r['cer']:.3f} | {r['duration_ratio']:.2f} | {r['rtf']:.3f} |")
+    L += ["", "Duration ratio = generated frames / reference frames (>1.5 suggests runaway generation); "
+          "RTF = generation time / audio duration (RTF < 1 is faster than real time)."]
+    samples = sorted((run_dir / "samples").glob("step_*"))
+    if samples:
+        L += ["", f"Demo samples (`speech-demo-v1`, step {int(samples[-1].name.split('_')[1])}):", ""]
+        for f in sorted(samples[-1].glob("*.wav"), key=lambda p: int(p.stem)):
+            L.append(f"- [{f.name}](samples/{samples[-1].name}/{f.name})")
+    return L
+
+
+def _speech_wer(run_dir: Path) -> float | None:
+    path = run_dir / "speech_eval.json"
+    return json.loads(path.read_text())["model"]["wer"] if path.exists() else None
+
+
 def build_report(run_dir: Path) -> Path:
     run_dir = Path(run_dir)
     cfg = load_config(run_dir / "config.yaml")
@@ -134,6 +165,7 @@ def build_report(run_dir: Path) -> Path:
     if m["error"]:
         L += ["", "**Errors:** " + "; ".join(f"step {e['step']}: {e['reason']}" for e in m["error"])]
 
+    L += _speech_section(run_dir)
     L += ["", "## Sample progression", ""]
     samples = sorted((run_dir / "samples").glob("step_*.jsonl"))
     picks = list(dict.fromkeys([samples[0], samples[len(samples) // 2], samples[-1]])) if samples else []
@@ -173,6 +205,9 @@ def compare_runs(run_a: Path, run_b: Path, out_dir: Path) -> Path:
     sa, sb = _summary(ma), _summary(mb)
     L = [f"# Comparison: {run_a.name} vs {run_b.name}", "", "| metric | A | B |", "|---|---:|---:|"]
     L += [f"| {k} | {_fmt(sa[k])} | {_fmt(sb[k])} |" for k in sa]
+    wa, wb = (_speech_wer(r) for r in (run_a, run_b))
+    if wa is not None and wb is not None:
+        L.append(f"| speech WER | {wa:.3f} | {wb:.3f} |")
     L += ["", "## Config differences", ""]
     diff = [k for k in config_diff(ca, cb) if not k.startswith("run.")]
     fa, fb = flatten_dict(ca), flatten_dict(cb)

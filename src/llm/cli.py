@@ -181,6 +181,20 @@ def _build_speech(args) -> int:
     return 0
 
 
+def _eval_speech_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run_dir")
+    p.add_argument("--n", type=int, default=200, help="held-out test chunks to score (default 200)")
+    p.add_argument("--floor", action="store_true", help="also score a freshly initialised model (seed 0)")
+
+
+@command("eval-speech", "Whisper-scored WER/CER, duration ratio and RTF for a speech run", _eval_speech_args)
+def _eval_speech(args) -> int:
+    from llm.speech.evaluate import run_eval_speech
+
+    print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

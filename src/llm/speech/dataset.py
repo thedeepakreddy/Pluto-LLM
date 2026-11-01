@@ -65,6 +65,10 @@ class SpeechShards:
         codes = np.asarray(self._codes[r["offset"]: r["offset"] + r["frames"]])
         return list(r["text_ids"]), list(r["token_frames"]), codes
 
+    def text(self, i: int) -> str:
+        """Raw text of chunk ``i`` (as recorded in the index)."""
+        return self._records[i]["text"]
+
     def order(self, seed: int, epoch: int) -> np.ndarray:
         if self._order_key != (seed, epoch):
             self._order, self._order_key = epoch_order(len(self), seed, epoch), (seed, epoch)

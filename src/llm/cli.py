@@ -24,6 +24,20 @@ def config_args(p: argparse.ArgumentParser) -> None:
                    metavar="SECTION.KEY=VALUE", help="override a config value (repeatable)")
 
 
+def _load(args):
+    from llm.config import load_config
+
+    return load_config(args.config, args.overrides)
+
+
+@command("prepare-data", "download, clean and split a dataset", config_args)
+def _prepare_data(args) -> int:
+    from llm.data.prepare import prepare_data
+
+    print(prepare_data(_load(args)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

@@ -97,6 +97,26 @@ def _train(args) -> int:
     return 0
 
 
+def _resume_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run_dir", help="run directory to continue")
+    p.add_argument("--stop-at-step", type=int, default=None)
+
+
+@command("resume", "continue a run from its latest valid checkpoint", _resume_args)
+def _resume(args) -> int:
+    from pathlib import Path
+
+    from llm.config import load_config
+    from llm.train.loop import train
+
+    run_dir = Path(args.run_dir).resolve()
+    state, reason = train(load_config(run_dir / "config.yaml"), run_dir, resume=True,
+                          stop_at_step=args.stop_at_step)
+    print(f"run: {run_dir}")
+    print(f"stopped: {reason} at step {state.step}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

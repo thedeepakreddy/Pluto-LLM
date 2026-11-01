@@ -55,3 +55,5 @@ until its milestone.
   predicts the 8 codebook tokens of each frame. 8× shorter sequences than flattening; real-time
   friendly; the same architecture Mini-Live builds on. First data: stories ≤ 30 s (~375 frames),
   longer ones chunked.
+- **Pluto's voice:** a single British female voice from Kokoro TTS — default `bf_emma`
+  (alternatives to audition: `bf_isabella`, `bf_alice`, `bf_lily`). One consistent voice for M2.

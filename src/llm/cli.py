@@ -117,6 +117,33 @@ def _resume(args) -> int:
     return 0
 
 
+@command("report", "write report.md and charts for a run",
+         lambda p: p.add_argument("run_dir"))
+def _report(args) -> int:
+    from llm.report import build_report
+
+    print(build_report(args.run_dir))
+    return 0
+
+
+def _compare_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run_a")
+    p.add_argument("run_b")
+    p.add_argument("--out", default=None, help="output directory (default runs/compare-<a>-vs-<b>)")
+
+
+@command("compare", "compare two runs side by side", _compare_args)
+def _compare(args) -> int:
+    from pathlib import Path
+
+    from llm.report import compare_runs
+
+    a, b = Path(args.run_a), Path(args.run_b)
+    out = Path(args.out) if args.out else a.parent / f"compare-{a.name}-vs-{b.name}"
+    print(compare_runs(a, b, out))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

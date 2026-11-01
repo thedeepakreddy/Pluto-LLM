@@ -238,3 +238,18 @@ def config_to_dict(cfg: Config) -> dict:
 
 def grad_accum_steps(cfg: Config) -> int:
     return cfg.train.tokens_per_step // (cfg.train.micro_batch_size * cfg.model.context_length)
+
+
+def flatten_dict(d: dict, prefix: str = "") -> dict:
+    """{"a": {"b": 1}} -> {"a.b": 1}"""
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}.{k}" if prefix else k
+        out.update(flatten_dict(v, key) if isinstance(v, dict) else {key: v})
+    return out
+
+
+def config_diff(a: dict, b: dict) -> list[str]:
+    """Dotted keys whose values differ between two config dicts."""
+    fa, fb = flatten_dict(a), flatten_dict(b)
+    return sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))

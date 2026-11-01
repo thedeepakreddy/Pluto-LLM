@@ -62,8 +62,9 @@ TinyStories (M1 data splits) → sentence chunks ≤ ~30 s → Kokoro (bf_emma, 
 
 **Main design: time-aligned "inner monologue".** One position per 80 ms frame. Each position
 carries the frame's 8 audio codes plus a text slot: the text token that starts at this frame, or
-`<PAD_TEXT>` if no new token starts here. Text that starts in the same frame spills into the next
-free slots, and a word's audio is delayed if needed so text never lags its audio. Stream:
+`<PAD_TEXT>` if no new token starts here. Each token is placed one frame before its audio starts
+(80 ms lead); tokens that crowd one frame spill into the next free slots. The maximum text lag is
+measured and reported. Stream:
 
 ```
 [BOS] <AUDIO> (t1,f1) (t2,f2) … (tN,fN) <END_AUDIO>      t = text slot, f = 8 codes
@@ -84,7 +85,7 @@ k+1 (Moshi-style one-frame delay), giving the voice box more context.
 - Outputs: a text head (next text slot), and a hidden state handed to the voice box.
 
 ### Voice box (depth Transformer)
-- 3 layers, d_model 256, 8 heads, 8 positions; input = projected brain state, then the
+- 3 layers, d_model 192, 8 heads, 8 positions; input = projected brain state, then the
   embeddings of codes already chosen in this frame; 8 output heads of 2,048 classes.
 - Predicts codebook 1, then 2, …, 8 of the frame autoregressively.
 

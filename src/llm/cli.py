@@ -46,6 +46,14 @@ def _train_tokenizer(args) -> int:
     return 0
 
 
+@command("tokenize", "encode the dataset splits into token shards", config_args)
+def _tokenize(args) -> int:
+    from llm.shards import write_shards
+
+    print(write_shards(_load(args)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

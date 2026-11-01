@@ -69,3 +69,21 @@ def stories_texts() -> list[str]:
     import json
 
     return [json.loads(l)["text"] for l in (FIXTURES / "stories.jsonl").read_text().splitlines()]
+
+
+def run_pipeline(config_path: Path, overrides=()):
+    """prepare-data -> train-tokenizer -> tokenize; returns (cfg, shard_dir)."""
+    from llm.config import load_config
+    from llm.data.prepare import prepare_data
+    from llm.shards import write_shards
+    from llm.tokenizer.bpe import train_tokenizer
+
+    cfg = load_config(config_path, list(overrides))
+    prepare_data(cfg)
+    train_tokenizer(cfg)
+    return cfg, write_shards(cfg)
+
+
+@pytest.fixture
+def prepared_tokenized(tiny_config):
+    return run_pipeline(tiny_config)

@@ -38,6 +38,14 @@ def _prepare_data(args) -> int:
     return 0
 
 
+@command("train-tokenizer", "train the byte-level BPE tokenizer", config_args)
+def _train_tokenizer(args) -> int:
+    from llm.tokenizer.bpe import train_tokenizer
+
+    print(train_tokenizer(_load(args)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

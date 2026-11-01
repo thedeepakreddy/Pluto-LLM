@@ -62,3 +62,10 @@ def edit_yaml(path: Path, fn) -> None:
     d = yaml.safe_load(path.read_text())
     fn(d)
     path.write_text(yaml.safe_dump(d, sort_keys=False))
+
+
+@pytest.fixture(scope="session")
+def stories_texts() -> list[str]:
+    import json
+
+    return [json.loads(l)["text"] for l in (FIXTURES / "stories.jsonl").read_text().splitlines()]

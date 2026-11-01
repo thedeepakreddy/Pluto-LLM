@@ -140,7 +140,10 @@ def test_masks():
     ):
         assert not ex.text_mask[0] and not ex.code_mask[0].any()
         assert ex.text_mask[1:].all()
-        assert np.array_equal(ex.code_mask, ex.codes != EMPTY)
+        flush = (ex.codes[:, 0] == EMPTY) & (ex.codes[:, 1:] != EMPTY).any(axis=1)
+        expected = ex.codes != EMPTY
+        expected[:, 0] |= flush
+        assert np.array_equal(ex.code_mask, expected)
         assert ex.text_mask.dtype == bool and ex.code_mask.dtype == bool
         assert ex.text_mask.shape == ex.text.shape and ex.code_mask.shape == ex.codes.shape
     a = build_aligned(ids, frames, codes, SP, 1)
@@ -151,6 +154,15 @@ def test_masks():
     assert a.text_mask[pad_pos]
     b = build_text_then_audio(ids, codes, SP, 1)
     assert b.text_mask[-3] and b.text[-3] == SP.pad_text
+    # flush positions: codebook-0 EMPTY is a target ("stop audio"), in both layouts
+    for ex, delay in [(build_aligned(ids, frames, codes, SP, 2), 2),
+                      (build_text_then_audio(ids, codes, SP, 2), 2), (a, 1), (b, 1)]:
+        end = len(ex.text) - 1
+        last = max(t for t in range(end) if ex.codes[t, 1:].any() and ex.codes[t, 1] != EMPTY)
+        fl = [t for t in range(end) if ex.codes[t, 0] == EMPTY and ex.code_mask[t, 0]]
+        assert fl == list(range(last - delay + 1, last + 1))
+        assert all(ex.codes[t, 0] == EMPTY for t in fl)
+        assert np.array_equal(extract_codes(ex, delay), codes)
     # delayed codebooks of the first frame position are EMPTY -> not targets
     assert a.code_mask[1, 0] and not a.code_mask[1, 1:].any()
 

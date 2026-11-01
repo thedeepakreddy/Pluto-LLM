@@ -95,6 +95,10 @@ def _finish(text: np.ndarray, codes: np.ndarray) -> Example:
     text_mask = np.ones(len(text), dtype=bool)
     text_mask[0] = False
     code_mask = codes != EMPTY
+    # Flush positions (codebook 0 EMPTY, delayed codebooks present): codebook-0 EMPTY is a
+    # target meaning "stop audio", so the model learns when the audio ends.
+    if codes.shape[1] > 1:
+        code_mask[:, 0] |= (codes[:, 0] == EMPTY) & (codes[:, 1:] != EMPTY).any(axis=1)
     code_mask[0] = False  # BOS is never a target (and carries no codes anyway)
     return Example(text=text, codes=codes, text_mask=text_mask, code_mask=code_mask)
 

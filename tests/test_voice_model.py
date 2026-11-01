@@ -76,7 +76,7 @@ def test_depth_causal_within_frame():
         codes2 = codes.clone()
         codes2[:, 3] = (codes2[:, 3] + 11) % CB
         l2 = d(h, codes2)
-    assert l1.shape == (5, K, CB)
+    assert l1.shape == (5, K, CB + 1)
     assert torch.allclose(l1[:, :4], l2[:, :4], atol=1e-6)
     assert not torch.allclose(l1[:, 4], l2[:, 4])
 
@@ -115,7 +115,8 @@ def test_initial_loss_near_ln():
     with torch.no_grad():
         out = m(_batch())
     assert abs(out.parts["text"] - math.log(V)) < 0.3
-    for k in range(1, K + 1):
+    assert abs(out.parts["code_1"] - math.log(CB + 1)) < 0.3  # head 0 includes "stop"
+    for k in range(2, K + 1):
         assert abs(out.parts[f"code_{k}"] - math.log(CB)) < 0.3
 
 
@@ -154,3 +155,31 @@ def test_depth_sample_stochastic_in_range():
         s = d.sample(torch.randn(1, 48), temperature=1.0, top_k=50, generator=g)
     assert s.dtype == torch.long and s.shape == (K,)
     assert int(s.min()) >= 0 and int(s.max()) < CB
+
+
+def test_depth_stop_class():
+    torch.manual_seed(0)
+    d = DepthTransformer(_audio(), brain_d=48).eval()
+    h = torch.randn(1, 48)
+    logits = d(h, torch.zeros(1, K, dtype=torch.long))
+    assert logits.shape == (1, K, CB + 1)
+    assert torch.isinf(logits[0, 1:, CB]).all() and torch.isfinite(logits[0, 0]).all()
+    with torch.no_grad():
+        d.heads[0].bias[CB] = 1e4  # stop dominates
+        s = d.sample(h, temperature=0.0)
+        assert int(s[0]) == CB and int(s[1:].max()) < CB  # delayed codebooks still sampled
+        assert int(d.sample(h, temperature=1.0, allow_stop=False)[0]) < CB
+        d.heads[0].bias[CB] = -1e4
+        assert int(d.sample(h, temperature=0.0, force_stop=True)[0]) == CB
+
+
+def test_stop_target_trains():
+    m = _model()
+    b = _batch()
+    codes = b.codes.clone()
+    codes[:, 5, 0] = EMPTY
+    cm = b.code_mask.clone()
+    cm[:, 5, 0] = True  # EMPTY as a codebook-0 target
+    out = m(SpeechBatch(b.text, codes, b.text_mask, cm))
+    assert torch.isfinite(out.loss)
+    out.loss.backward()

@@ -10,8 +10,9 @@ next position, codebook by codebook. Its input sequence is
 ``[in_proj(h), emb_0(c_0), ..., emb_{K-2}(c_{K-2})]`` and head k at position k predicts ``c_k``.
 
 Target shift: brain hidden at position t predicts text and codes at position t + 1. Targets whose
-mask is False (including every ``EMPTY`` code) are ignored. EMPTY (= codebook_size) is a valid
-*input* id (embeddings have codebook_size + 1 rows) but never a target.
+mask is False are ignored. EMPTY (= codebook_size) is a valid *input* id (embeddings have
+codebook_size + 1 rows). It is a target only for codebook 0 at flush positions (layout marks
+them), where it means "stop audio"; depth head 0 therefore has codebook_size + 1 classes.
 """
 from __future__ import annotations
 
@@ -70,7 +71,9 @@ class DepthTransformer(nn.Module):
         self.pos_emb = nn.Parameter(torch.zeros(self.K, d))
         self.blocks = nn.ModuleList(Block(self.cfg) for _ in range(audio.depth_layers))
         self.ln_f = nn.LayerNorm(d)
-        self.heads = nn.ModuleList(nn.Linear(d, audio.codebook_size) for _ in range(self.K))
+        # Head 0 has one extra class, index codebook_size (= EMPTY): "stop audio" (flush position).
+        self.heads = nn.ModuleList(
+            nn.Linear(d, audio.codebook_size + (1 if k == 0 else 0)) for k in range(self.K))
         self.apply(_init_weights)
         nn.init.normal_(self.pos_emb, 0.0, 0.02)
         _scale_residuals(self.blocks, audio.depth_layers)
@@ -81,18 +84,34 @@ class DepthTransformer(nn.Module):
         return x + self.pos_emb[k]
 
     def forward(self, h: torch.Tensor, codes: torch.Tensor) -> torch.Tensor:
-        """Teacher-forced logits [N, K, codebook_size] for brain states h [N, brain_d]."""
+        """Teacher-forced logits [N, K, codebook_size + 1] for brain states h [N, brain_d].
+
+        Class ``codebook_size`` (EMPTY) is only reachable for codebook 0 (stop audio)."""
         x = torch.stack([self._input(h, 0, None)]
                         + [self._input(None, k, codes[:, k - 1]) for k in range(1, self.K)], dim=1)
         for block in self.blocks:
             x = block(x)
         x = self.ln_f(x)
-        return torch.stack([self.heads[k](x[:, k]) for k in range(self.K)], dim=1)
+        return torch.stack([self._head(k, x[:, k]) for k in range(self.K)], dim=1)
+
+    def _head(self, k: int, x: torch.Tensor) -> torch.Tensor:
+        """Logits [..., codebook_size + 1]; heads 1..K-1 get -inf for the EMPTY class."""
+        logits = self.heads[k](x)
+        if k > 0:
+            pad = torch.full_like(logits[..., :1], float("-inf"))
+            logits = torch.cat([logits, pad], dim=-1)
+        return logits
 
     @torch.no_grad()
     def sample(self, h: torch.Tensor, temperature: float = 1.0, top_k: int | None = None,
-               generator: torch.Generator | None = None) -> torch.Tensor:
-        """Sample one frame's K codes (LongTensor[K]) for h [1, brain_d]; temperature 0 = greedy."""
+               generator: torch.Generator | None = None, allow_stop: bool = True,
+               force_stop: bool = False) -> torch.Tensor:
+        """Sample one frame's K codes (LongTensor[K]) for h [1, brain_d]; temperature 0 = greedy.
+
+        Codebook 0 may be EMPTY (= codebook_size, "stop audio": a flush position); codebooks
+        1..K-1 are then still sampled (they carry delayed frames), conditioned on EMPTY.
+        ``allow_stop=False`` masks EMPTY out; ``force_stop=True`` sets codebook 0 to EMPTY.
+        """
         if h.size(0) != 1:
             raise ValueError("DepthTransformer.sample expects a single brain state [1, brain_d]")
         out = torch.empty(self.K, dtype=torch.long, device=h.device)
@@ -105,8 +124,14 @@ class DepthTransformer(nn.Module):
                 x, kv = block.forward_cached(x, None if cache is None else cache[i])
                 new_cache.append(kv)
             cache = new_cache
-            logits = self.heads[k](self.ln_f(x))[0, 0].float()
-            if temperature == 0.0:
+            logits = self._head(k, self.ln_f(x))[0, 0].float()
+            if k == 0 and force_stop:
+                c = self.codebook_size
+            elif k == 0 and not allow_stop:
+                logits[self.codebook_size] = float("-inf")
+            if k == 0 and force_stop:
+                pass
+            elif temperature == 0.0:
                 c = int(logits.argmax())
             else:
                 logits = filter_logits(logits / temperature, top_k, None)

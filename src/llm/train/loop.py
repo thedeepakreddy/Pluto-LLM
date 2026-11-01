@@ -19,7 +19,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from llm.config import Config, ConfigError, TrainConfig, config_to_dict, grad_accum_steps
+from llm.config import (Config, ConfigError, TrainConfig, config_diff, config_to_dict,
+                        grad_accum_steps)
 from llm.data.prepare import data_dir
 from llm.eval.metrics import evaluate
 from llm.eval.prompts import run_prompt_eval
@@ -80,19 +81,6 @@ def _seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
-
-def _flatten(d: dict, prefix: str = "") -> dict:
-    out = {}
-    for k, v in d.items():
-        key = f"{prefix}.{k}" if prefix else k
-        out.update(_flatten(v, key) if isinstance(v, dict) else {key: v})
-    return out
-
-
-def _config_diff(a: dict, b: dict) -> list[str]:
-    fa, fb = _flatten(a), _flatten(b)
-    return sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
 
 
 class _StopFlag:
@@ -171,7 +159,7 @@ class Trainer:
         if path is None:
             raise FileNotFoundError(f"no valid checkpoint to resume from in {self.run_dir / 'checkpoints'}")
         state, payload = load_checkpoint(path, self.model, self.optimizer, self.scaler)
-        diff = _config_diff(payload["config"], self.cfg_dict)
+        diff = config_diff(payload["config"], self.cfg_dict)
         if diff:
             raise ConfigError(f"config changed since the checkpoint was saved: {', '.join(diff)}")
         changed = [k for k in self.provenance if payload["provenance"].get(k) != self.provenance[k]]

@@ -57,3 +57,13 @@ until its milestone.
   longer ones chunked.
 - **Pluto's voice:** a single British female voice from Kokoro TTS — default `bf_emma`
   (alternatives to audition: `bf_isabella`, `bf_alice`, `bf_lily`). One consistent voice for M2.
+- **M2 upgrades (adopted):**
+  1. **Text warm-start:** the M2 brain is first trained as a text-only model on TinyStories,
+     then extended with audio.
+  2. **Time-aligned text stream ("inner monologue", as in Moshi):** each 80 ms frame carries its
+     audio codes plus the text token being spoken then. Word timings from Kokoro (fallback:
+     Whisper word timestamps). This supersedes "text first, then audio" as the main design.
+  3. **Acoustic delay + weighted loss:** fine codebooks 2–8 lag the semantic codebook by one
+     frame; codebook 1 loss weighted higher (configurable).
+  4. **Controlled comparison:** text-then-audio kept as a baseline; both trained with identical
+     size, data, steps and seed, compared by Whisper word error rate → a measured research result.

@@ -7,6 +7,7 @@ exported file raises if any private string still appears.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -19,28 +20,51 @@ TEXT_SUFFIXES = {".md", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".csv", ".sv
 MODES = ("text", "speech")
 
 
-def _private_strings(config: dict, ev: dict | None) -> set[str]:
-    out: set[str] = set()
+WORD_FACTS = ("creator_name", "projects")  # matched on word boundaries (e.g. "Ada" but not "metadata")
+
+
+def _private_patterns(config: dict, ev: dict | None) -> tuple[set[str], set[str]]:
+    """``(substrings, whole words)`` that identify the creator. Generic dictionary answers (naming
+    words like "planet", degree words like "mathematics") are deliberately NOT scanned: they occur in
+    ordinary stories, and the identity outputs are already redacted structurally."""
+    subs: set[str] = set()
+    words: set[str] = set()
     ident_cfg = config.get("identity") or {}
     for k in ("hf_dataset", "path"):
         if ident_cfg.get(k):
-            out.add(str(ident_cfg[k]))
+            subs.add(str(ident_cfg[k]))
+    probes: list[tuple[str, list[str], str]] = []
     ident = (ev or {}).get("identity") or {}
     for m in MODES:
-        for item in (ident.get(m) or {}).get("items", []):
-            out.update(str(e) for e in item.get("expected", []))
+        for it in (ident.get(m) or {}).get("items", []):
+            probes.append((it.get("prompt", ""), list(it.get("expected", [])), it.get("fact", "")))
     if ident_cfg:
-        try:  # probes from the prepared identity dir, when present locally
+        try:
             from llm.config import load_config_dict
-            from llm.identity.pcid import identity_dir, load_probes
+            from llm.identity.pcid import identity_dir, load_pcid, load_probes, load_statements
 
-            d = identity_dir(load_config_dict(config))
+            cfg = load_config_dict(config)
+            d = identity_dir(cfg)
             if d.exists():
-                for p in load_probes(d):
-                    out.update(p.expected)
+                probes += [(p.prompt, list(p.expected), p.fact) for p in load_probes(d)]
+                for st in load_statements(d):  # "Pluto's creator <full name> goes by <short>"
+                    m = re.match(r"Pluto's creator (.+?) goes by (.+)$", st.text)
+                    if m:
+                        subs.add(m.group(1))
+                        words.add(m.group(2).rstrip("."))
+            if ident_cfg.get("path") and Path(ident_cfg["path"]).exists():
+                info = load_pcid(Path(ident_cfg["path"])).get("identity.json") or {}
+                if info.get("full_name"):
+                    subs.add(info["full_name"])
+                if info.get("preferred_short_name"):
+                    words.add(info["preferred_short_name"])
         except Exception:
             pass
-    return {s for s in out if s.strip()}
+    for prompt, expected, fact in probes:
+        subs.add(prompt)
+        if fact in WORD_FACTS or fact.startswith("project"):
+            words.update(expected)
+    return {x for x in subs if x.strip()}, {w for w in words if w.strip()}
 
 
 def _redact_eval(ev: dict) -> dict:
@@ -74,7 +98,7 @@ def export_public_results(run_dir: Path, dest: Path) -> list[Path]:
     config = yaml.safe_load((run_dir / "config.yaml").read_text()) if (run_dir / "config.yaml").exists() else {}
     ev_path = run_dir / "speech_eval.json"
     ev = json.loads(ev_path.read_text()) if ev_path.exists() else None
-    secrets = _private_strings(config or {}, ev)
+    secrets = _private_patterns(config or {}, ev)
     has_identity = bool((config or {}).get("identity")) or bool((ev or {}).get("identity"))
 
     dest.mkdir(parents=True, exist_ok=True)
@@ -108,14 +132,16 @@ def export_public_results(run_dir: Path, dest: Path) -> list[Path]:
     return written
 
 
-def _scan(written: list[Path], secrets: set[str], has_identity: bool) -> None:
-    lowered = [s.lower() for s in secrets]
+def _scan(written: list[Path], secrets: tuple[set[str], set[str]], has_identity: bool) -> None:
+    subs, words = secrets
+    lowered = [x.lower() for x in subs]
+    regexes = [re.compile(rf"\b{re.escape(w)}\b", re.IGNORECASE) for w in words]
     for f in written:
         if f.suffix.lower() not in TEXT_SUFFIXES:
             continue
-        text = f.read_text(errors="ignore").lower()
+        raw = f.read_text(errors="ignore")
+        text = raw.lower()
         if has_identity and ('"per_fact"' in text or '"expected"' in text):
             raise ValueError(f"{f}: private identity details remain after redaction")
-        for s in lowered:
-            if s in text:
-                raise ValueError(f"{f}: contains private identity data; refusing to export")
+        if any(x in text for x in lowered) or any(r.search(raw) for r in regexes):
+            raise ValueError(f"{f}: contains private identity data; refusing to export")

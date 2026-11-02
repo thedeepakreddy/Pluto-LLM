@@ -52,7 +52,7 @@ def test_export_redacts_identity(tmp_path):
     run = _make_run(tmp_path, True)
     secret = set()
     for p in build_probes(load_pcid(PCID)):
-        secret |= set(p.expected)
+        secret |= set(p.expected) | {p.prompt}
     assert secret
     files = export_public_results(run, tmp_path / "out")
     dest = tmp_path / "out"
@@ -85,3 +85,28 @@ def test_export_final_scan_raises(tmp_path):
     with pytest.raises(ValueError, match="private identity"):
         export_public_results(run, tmp_path / "out")
     assert not (tmp_path / "out" / "limitations.md").exists()
+
+
+def test_generic_words_in_stories_do_not_block(tmp_path):
+    run = _make_run(tmp_path, True)
+    story = "The little planet floated in space. The universe was big. Check the metadata, said Tom.\n"
+    (run / "samples" / "step_00000010" / "0.txt").write_text(story)
+    with (run / "report.md").open("a") as f:
+        f.write(story)
+    export_public_results(run, tmp_path / "out")
+    assert "planet" in (tmp_path / "out" / "report.md").read_text()
+
+
+@pytest.mark.parametrize("source", ["path", "hf"])
+def test_full_name_blocks(tmp_path, source):
+    run = _make_run(tmp_path, True)
+    if source == "path":
+        cfg = yaml.safe_load((run / "config.yaml").read_text())
+        cfg["identity"] = {"path": str(PCID)}
+        (run / "config.yaml").write_text(yaml.safe_dump(cfg))
+        leak = "Ada Quill Example"
+    else:
+        leak = "Once upon a time Ada met a dog."  # short name, whole word
+    (run / "samples" / "step_00000010" / "0.txt").write_text(leak + "\n")
+    with pytest.raises(ValueError, match="private identity"):
+        export_public_results(run, tmp_path / "out")

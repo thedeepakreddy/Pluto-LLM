@@ -145,6 +145,21 @@ class AudioConfig:
 
 
 @dataclass(frozen=True)
+class IdentityConfig:
+    """Creator-identity (PCID) recipe (M2). Optional. Exactly one of path / hf_dataset."""
+
+    path: str | None = None
+    hf_dataset: str | None = None
+    name: str = "pcid"
+    version: int = 1
+    exclude_fields: tuple[str, ...] = ("current_location",)
+    holdout_fraction: float = 0.2
+    text_every: int = 50
+    speech_every: int = 20
+    root: str = "identity"
+
+
+@dataclass(frozen=True)
 class Config:
     data: DataConfig
     tokenizer: TokenizerConfig
@@ -154,6 +169,7 @@ class Config:
     run: RunConfig
     speech: SpeechConfig | None = None
     audio: AudioConfig | None = None
+    identity: IdentityConfig | None = None
 
 
 # Mimi codec frame rate (frames/s); 24 kHz audio / 1,920 samples per frame.
@@ -258,6 +274,19 @@ def _validate(cfg: Config) -> None:
     if t.warmup_steps > t.max_steps:
         raise ConfigError("train.warmup_steps must be <= train.max_steps")
     _validate_speech(cfg)
+    _validate_identity(cfg)
+
+
+def _validate_identity(cfg: Config) -> None:
+    idc = cfg.identity
+    if idc is None:
+        return
+    if (idc.path is None) == (idc.hf_dataset is None):
+        raise ConfigError("identity: exactly one of identity.path or identity.hf_dataset is required")
+    if not 0.0 <= idc.holdout_fraction < 1.0:
+        raise ConfigError(f"identity.holdout_fraction must be in [0, 1), got {idc.holdout_fraction}")
+    if idc.text_every < 1 or idc.speech_every < 1:
+        raise ConfigError("identity.text_every and identity.speech_every must be >= 1")
 
 
 def _validate_speech(cfg: Config) -> None:
@@ -335,7 +364,7 @@ def config_to_dict(cfg: Config) -> dict:
 
     d = conv(dataclasses.asdict(cfg))
     # Optional M2 sections are omitted when unset so M1 config dumps stay byte-identical.
-    for k in ("speech", "audio"):
+    for k in ("speech", "audio", "identity"):
         if d.get(k) is None:
             d.pop(k, None)
     return d

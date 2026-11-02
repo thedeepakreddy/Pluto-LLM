@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.1",
+  "record_type": "creator_identity",
+  "full_name": "Ada Quill Example",
+  "preferred_short_name": "Ada",
+  "origin_country": "Freedonia",
+  "current_location": "Harborview Testville",
+  "personality_note": {
+    "creator_stated": "I am curious, stubborn about details and happiest when building things.",
+    "normalized_summary": "curious, detail-oriented and driven by building things",
+    "status": "creator_stated"
+  },
+  "privacy": "Fictional test fixture. No real person. Do not use contact data."
+}

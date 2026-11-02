@@ -8,6 +8,7 @@ freshly initialised model (``llm eval-speech --floor``).
 from __future__ import annotations
 
 import time
+from typing import Literal
 
 import numpy as np
 
@@ -73,6 +74,69 @@ def ceiling_wer(codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]]) 
     return {"wer": wer, "cer": cer, "n": len(examples)}
 
 
+def greedy_text_continuation(model, tok, prompt: str, max_new_tokens: int = 24) -> str:
+    """BOS + prompt tokens as text with EMPTY codes -> greedy next text tokens (specials excluded,
+    stops at the context limit). Returns the decoded continuation."""
+    import torch
+
+    from llm.speech.layout import EMPTY, special_ids
+
+    sp = special_ids(tok.vocab_size)
+    device = next(model.parameters()).device
+    ids = [sp.bos, *tok.encode(prompt)]
+    new: list[int] = []
+    was = model.training
+    model.eval()
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            if len(ids) >= model.cfg.context_length:
+                break
+            text = torch.tensor([ids], dtype=torch.long, device=device)
+            codes = torch.full((1, len(ids), model.K), EMPTY, dtype=torch.long, device=device)
+            logits = model.text_head(model.hidden(text, codes)[0, -1])
+            nxt = int(logits[: tok.vocab_size].argmax())
+            ids.append(nxt)
+            new.append(nxt)
+    model.train(was)
+    return tok.decode(new)
+
+
+def identity_recall(model, tok, probes, mode: Literal["text", "speech"], codec: Codec | None = None,
+                    asr: ASR | None = None, audio: AudioConfig | None = None) -> dict:
+    """Fraction of probes whose continuation contains any expected string (case-insensitive).
+
+    text: greedy text continuation of 24 tokens. speech: ``speak(prompt)`` -> decode ->
+    ``continue_speech`` 60 frames -> ASR transcript of the continuation (aligned layout only).
+    """
+    from llm.speech.generate import continue_speech
+
+    items: list[dict] = []
+    per: dict[str, list[bool]] = {}
+    for p in probes:
+        if mode == "text":
+            out = greedy_text_continuation(model, tok, p.prompt, 24)
+        elif mode == "speech":
+            if codec is None or asr is None or audio is None:
+                raise ValueError("speech recall needs codec, asr and audio")
+            sampling = SpeechSampling()
+            prompt_codes = speak(model, p.prompt, tok, audio, sampling)
+            out = ""
+            if len(prompt_codes):
+                cont = continue_speech(model, codec.decode(prompt_codes), codec.sample_rate, tok, codec,
+                                       asr, audio, sampling, max_new_frames=60)
+                if len(cont):
+                    out = asr.transcribe(codec.decode(cont), codec.sample_rate).text
+        else:
+            raise ValueError(f"unknown mode {mode!r}")
+        hit = any(e.lower() in out.lower() for e in p.expected)
+        per.setdefault(p.fact, []).append(hit)
+        items.append({"prompt": p.prompt, "expected": list(p.expected), "fact": p.fact,
+                      "output": out, "hit": hit})
+    n = len(items)
+    return {"recall": sum(i["hit"] for i in items) / n if n else float("nan"),
+            "per_fact": {f: sum(v) / len(v) for f, v in per.items()}, "items": items}
+
+
 def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
     """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``."""
     import json
@@ -103,6 +167,14 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
         torch.manual_seed(0)
         fresh = SpeechGPT(cfg.model, cfg.audio, tok.vocab_size + 4).eval()
         out["floor"] = evaluate_speech(fresh, tok, codec, asr, examples, cfg.audio, sampling)
+    if cfg.identity is not None:
+        from llm.identity.pcid import identity_dir, load_probes
+
+        probes = load_probes(identity_dir(cfg))
+        ident = {"n_probes": len(probes), "text": identity_recall(model, tok, probes, "text")}
+        if cfg.audio.layout == "aligned":
+            ident["speech"] = identity_recall(model, tok, probes, "speech", codec, asr, cfg.audio)
+        out["identity"] = ident
     path = run_dir / "speech_eval.json"
     atomic_write_json(path, json.loads(json.dumps(out)))
     return path

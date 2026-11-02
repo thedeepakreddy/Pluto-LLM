@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.1",
+  "qualifications": [
+    {"degree": "B.Sc in Mathematics", "institutions": ["Example Institute of Learning", "Fictional Open College"], "period": "2027-2031"},
+    {"degree": "Certificate in Machine Learning", "institution": "Imaginary Online Academy", "period": "2032"}
+  ]
+}

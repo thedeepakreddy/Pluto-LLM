@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.1",
+  "vision": "a helpful assistant that can see, listen and talk in real time",
+  "capability_goals": ["understand images", "hold a spoken conversation", "explain its own reasoning"],
+  "technical_directions": {"speech": "streaming audio tokens", "vision": "image patch tokens"},
+  "status": "aspiration"
+}

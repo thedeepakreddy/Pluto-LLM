@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.1",
+  "motivation": "Ada wanted to understand frontier models by building one step by step.",
+  "creator_stated_points": [
+    "Pluto began as a weekend experiment in 2034.",
+    "Pluto is trained only on data the creator can explain."
+  ],
+  "status": "creator_stated"
+}

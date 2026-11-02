@@ -107,6 +107,18 @@ def _speech_section(run_dir: Path) -> list[str]:
             L.append(f"| {name} | {r['wer']:.3f} | {r['cer']:.3f} | {r['duration_ratio']:.2f} | {r['rtf']:.3f} |")
     L += ["", "Duration ratio = generated frames / reference frames (>1.5 suggests runaway generation); "
           "RTF = generation time / audio duration (RTF < 1 is faster than real time)."]
+    ident = d.get("identity")
+    if ident:
+        modes = [m for m in ("text", "speech") if m in ident]
+        facts = sorted({f for m in modes for f in ident[m]["per_fact"]})
+        L += ["", "### Identity recall", "",
+              f"{ident.get('n_probes', '?')} fixed probes from the creator identity data (prompt -> expected "
+              "substring); text = greedy continuation, speech = spoken continuation -> ASR.", "",
+              "| fact | " + " | ".join(modes) + " |", "|---|" + "---:|" * len(modes)]
+        for f in facts:
+            L.append(f"| {f} | " + " | ".join(
+                f"{ident[m]['per_fact'][f]:.2f}" if f in ident[m]["per_fact"] else "-" for m in modes) + " |")
+        L.append("| **all** | " + " | ".join(f"{ident[m]['recall']:.2f}" for m in modes) + " |")
     samples = sorted((run_dir / "samples").glob("step_*"))
     if samples:
         L += ["", f"Demo samples (`speech-demo-v1`, step {int(samples[-1].name.split('_')[1])}):", ""]

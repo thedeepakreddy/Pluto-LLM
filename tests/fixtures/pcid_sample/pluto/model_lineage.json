@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.1",
+  "concept": "each version of Pluto grows from the previous one",
+  "creator_intention": "keep every step reproducible",
+  "naming_progression": ["Pluto Mini", "Pluto Live"],
+  "technical_caveat": "later versions are plans, not finished models",
+  "status": "aspiration"
+}

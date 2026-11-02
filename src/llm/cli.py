@@ -181,6 +181,18 @@ def _build_speech(args) -> int:
     return 0
 
 
+@command("prepare-identity", "creator identity (PCID) -> statements, probes, manifest", config_args)
+def _prepare_identity(args) -> int:
+    from llm.identity.pcid import prepare_identity
+
+    cfg = _load(args)
+    if cfg.identity is None:
+        print("error: config has no identity section", file=sys.stderr)
+        return 2
+    print(prepare_identity(cfg))
+    return 0
+
+
 def _eval_speech_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("run_dir")
     p.add_argument("--n", type=int, default=200, help="held-out test chunks to score (default 200)")

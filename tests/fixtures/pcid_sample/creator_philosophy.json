@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.1",
+  "creator_stated_principles": [
+    {"topic": "honesty", "statement": "report what was measured, not what was hoped"},
+    {"topic": "learning", "statement": "build things from scratch to understand them"}
+  ],
+  "personality": "patient and playful",
+  "status_note": "These are the creator's own stated principles."
+}

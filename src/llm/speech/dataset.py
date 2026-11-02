@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from llm.config import AudioConfig
+from llm.config import AudioConfig, IdentityConfig
 from llm.shards import DataPosition, TokenChunks, epoch_order
 from llm.speech.layout import (
     EMPTY,
@@ -120,9 +120,39 @@ def _text_batch(text_chunks: TokenChunks, batch_size: int, seed: int, audio: Aud
     return collate(examples, sp)
 
 
+def _identity_text_batch(ids: list[list[int]], batch_size: int, seed: int, audio: AudioConfig,
+                         sp: SpecialIds, step: int, max_tokens: int | None) -> SpeechBatch:
+    order = epoch_order(len(ids), seed, step)
+    examples = [build_text_only(ids[int(order[j % len(order)])][:max_tokens], sp, audio.codebooks)
+                for j in range(batch_size)]
+    return collate(examples, sp)
+
+
+def _identity_speech_batch(ds: SpeechShards, batch_size: int, seed: int, audio: AudioConfig,
+                           sp: SpecialIds, step: int) -> SpeechBatch:
+    order = epoch_order(len(ds), seed, step)
+    return collate([_speech_example(ds, int(order[j % len(order)]), audio, sp)
+                    for j in range(batch_size)], sp)
+
+
 def next_speech_batch(ds: SpeechShards, pos: DataPosition, batch_size: int, seed: int,
                       audio: AudioConfig, sp: SpecialIds, step: int,
-                      text_chunks: TokenChunks | None) -> tuple[SpeechBatch, DataPosition]:
+                      text_chunks: TokenChunks | None,
+                      identity_text: list[list[int]] | None = None,
+                      identity_speech: SpeechShards | None = None,
+                      identity: IdentityConfig | None = None,
+                      max_text_tokens: int | None = None) -> tuple[SpeechBatch, DataPosition]:
+    """One micro-batch. Precedence per step (creator identity first, when given):
+    ``(step+1) % identity.text_every == 0`` -> identity statements as text;
+    else ``(step+1) % identity.speech_every == 0`` -> identity speech;
+    else every ``audio.text_every``-th step text-only, otherwise speech. Identity batches pick
+    items with ``epoch_order(len, seed, step)`` and leave the speech position untouched.
+    ``max_text_tokens`` caps an identity statement (BOS + tokens must fit the context)."""
+    if identity is not None:
+        if identity_text and (step + 1) % identity.text_every == 0:
+            return _identity_text_batch(identity_text, batch_size, seed, audio, sp, step, max_text_tokens), pos
+        if identity_speech is not None and len(identity_speech) and (step + 1) % identity.speech_every == 0:
+            return _identity_speech_batch(identity_speech, batch_size, seed, audio, sp, step), pos
     if text_chunks is not None and (step + 1) % audio.text_every == 0:
         return _text_batch(text_chunks, batch_size, seed, audio, sp, step), pos
     epoch, index = pos.epoch, pos.index

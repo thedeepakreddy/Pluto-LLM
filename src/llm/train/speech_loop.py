@@ -86,6 +86,22 @@ class SpeechTrainer(BaseTrainer):
         self.eval_ds = SpeechShards(self.sdir, EVAL_SPLIT, self.audio.codebooks)
         # BOS + tokens must fit the context.
         self.text_chunks = TokenChunks(shard_dir(cfg), "train", seq_len=cfg.model.context_length - 1)
+        self._setup_identity()
+
+    def _setup_identity(self) -> None:
+        """Creator-identity sources (train statements as text; the ``identity`` speech split)."""
+        self.identity_text, self.identity_speech, self.identity_dir = None, None, None
+        if self.cfg.identity is None:
+            return
+        from llm.identity.pcid import identity_dir, load_statements
+
+        self.identity_dir = identity_dir(self.cfg)
+        if not (self.identity_dir / MANIFEST).exists():
+            raise FileNotFoundError(f"{self.identity_dir}: run `llm prepare-identity` first")
+        self.identity_text = [self.tok.encode(s.text) for s in load_statements(self.identity_dir)
+                              if not s.holdout]
+        if (self.sdir / "identity_index.jsonl").exists():
+            self.identity_speech = SpeechShards(self.sdir, "identity", self.audio.codebooks)
 
     def build_model(self) -> SpeechGPT:
         return SpeechGPT(self.cfg.model, self.audio, self.tok.vocab_size + 4)
@@ -93,7 +109,8 @@ class SpeechTrainer(BaseTrainer):
     def provenance_inputs(self) -> dict[str, str]:
         return {"speech": manifest_checksum(self.sdir),
                 "tokenizer": manifest_checksum(tokenizer_dir(self.cfg)),
-                "shards": manifest_checksum(shard_dir(self.cfg))}
+                "shards": manifest_checksum(shard_dir(self.cfg)),
+                **({"identity": manifest_checksum(self.identity_dir)} if self.identity_dir else {})}
 
     def on_fresh_start(self) -> None:
         if self.audio.init_from is None:
@@ -109,7 +126,9 @@ class SpeechTrainer(BaseTrainer):
         # ``micro`` (global micro-batch index) drives text_every: with accum == 1 every
         # text_every-th optimizer step is text-only.
         return next_speech_batch(self.train_ds, pos, self.t.micro_batch_size, self.t.seed, self.audio,
-                                 self.sp, micro, self.text_chunks)
+                                 self.sp, micro, self.text_chunks,
+                                 identity_text=self.identity_text, identity_speech=self.identity_speech,
+                                 identity=self.cfg.identity, max_text_tokens=self.cfg.model.context_length - 1)
 
     def loss(self, batch):
         batch = batch.to(self.device)

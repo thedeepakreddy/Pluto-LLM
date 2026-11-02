@@ -348,3 +348,16 @@ def test_private_outputs_are_git_ignored():
     paths = ["identity/pcid-v1/statements.jsonl", "speech/x-v1/train_codes.bin"]
     r = subprocess.run(["git", "check-ignore", *paths], cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0 and r.stdout.split() == paths, r.stdout + r.stderr
+
+
+def test_prepare_identity_deterministic_across_runs(tiny_config):
+    from llm.manifest import manifest_checksum
+
+    cfg = _identity_cfg(tiny_config)
+    out = prepare_identity(cfg)
+    first = manifest_checksum(out)
+    files = {f: (out / f).read_bytes() for f in ("statements.jsonl", "probes.jsonl", "identity_report.md")}
+    shutil.rmtree(out)
+    out2 = prepare_identity(cfg)
+    assert manifest_checksum(out2) == first
+    assert {f: (out2 / f).read_bytes() for f in files} == files

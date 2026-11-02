@@ -74,3 +74,4 @@ until its milestone.
 - **Execution method for M2:** subagent-driven (fresh implementer + reviewer per task).
 - **Creator dataset storage (decided 2026-11-02): private Hugging Face dataset** (configs use identity.hf_dataset; never committed to the repo).
 - **Compute after M2 (decided 2026-11-02): Modal** (free tier ≈ 7.5 H100-hours; check whether credits renew monthly). Plan: a small Modal entrypoint (container image + Volume for data/runs), reusing exact resume + Hub sync; spend H100 hours on M3/M4 heavy runs, keep debugging on free Kaggle/CPU.
+- **Identity mixing (M2 run):** identity speech every 100th step, identity text every 50th (≈1% / 2% of micro-batches); bump `speech.version` if voice or identity data change (completed speech dirs are reused as-is).

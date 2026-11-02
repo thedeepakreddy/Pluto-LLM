@@ -55,3 +55,73 @@ def test_app_importable_without_gradio():
     code = ("import sys, llm.speech.app as a; "
             "assert 'gradio' not in sys.modules; assert callable(a.build_app)")
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_resample_keeps_frequency_and_length():
+    from llm.speech.wavio import resample
+
+    t = np.arange(48000) / 48000
+    y = resample(np.sin(2 * np.pi * 440 * t).astype(np.float32), 48000, 24000)
+    assert len(y) == 24000 and y.dtype == np.float32
+    assert int(np.argmax(np.abs(np.fft.rfft(y)))) == 440
+    assert np.abs(y).max() == pytest.approx(1.0, abs=0.02)
+    x = np.ones(10, dtype=np.float32)
+    assert resample(x, 24000, 24000) is not None and len(resample(x, 24000, 24000)) == 10
+
+
+def test_cli_continue_48k_stereo(run, tmp_path):
+    t = np.arange(48000) / 48000
+    s = (np.sin(2 * np.pi * 220 * t) * 0.3 * 32767).astype("<i2")
+    src = tmp_path / "in.wav"
+    with wave.open(str(src), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(np.stack([s, s], axis=1).tobytes())
+    out = tmp_path / "c.npy"
+    assert cli.main(["continue-speech", str(run), "--audio", str(src), "--out", str(out),
+                     "--codes-only", "--max-new-frames", "6"]) == 0
+    assert np.load(out).shape[1] == 8
+
+
+def _fake_gradio(monkeypatch):
+    import types
+
+    class Err(Exception):
+        pass
+
+    clicks = []
+
+    class Ctx:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def click(self, fn, *a, **k):
+            clicks.append(fn)
+
+    g = types.ModuleType("gradio")
+    g.Error = Err
+    for n in ("Blocks", "Tab", "Textbox", "Slider", "Number", "Audio", "Button"):
+        setattr(g, n, Ctx)
+    monkeypatch.setitem(sys.modules, "gradio", g)
+    return Err, clicks
+
+
+def test_app_continue_maps_errors(run, monkeypatch):
+    err, clicks = _fake_gradio(monkeypatch)
+    from llm.speech.app import build_app
+
+    build_app(run)
+    _, cont_fn = clicks
+    with pytest.raises(err):
+        cont_fn(None, 0.8, 50, 1, 6)
+    with pytest.raises(err):  # too-short prompt / bad frames -> ValueError from the pipeline
+        cont_fn((24000, np.zeros(10, dtype=np.float32)), 0.8, 50, 1, -1)
+    sr, _ = cont_fn((48000, np.zeros((4800, 2), dtype=np.int16)), 0.8, 50, 1, 6)
+    assert sr == 24000

@@ -27,3 +27,29 @@ def read_wav(path: str | Path) -> tuple[np.ndarray, int]:
     if ch > 1:
         x = x[: len(x) // ch * ch].reshape(-1, ch).mean(axis=1)
     return x.astype(np.float32), sr
+
+
+def to_mono_float32(x: np.ndarray) -> np.ndarray:
+    """Normalise int PCM to [-1, 1] (divide by 32768) and average channels (samples, channels)."""
+    x = np.asarray(x)
+    if x.dtype.kind in "iu":
+        x = x.astype(np.float32) / 32768.0
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    return x.astype(np.float32)
+
+
+def resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
+    """FFT-based resampling (like scipy.signal.resample); mono float32; identity if rates match."""
+    x = to_mono_float32(audio)
+    if sr_in == sr_out or len(x) == 0:
+        return x
+    n_out = max(1, round(len(x) * sr_out / sr_in))
+    spec = np.fft.rfft(x)
+    out = np.zeros(n_out // 2 + 1, dtype=spec.dtype)
+    m = min(len(spec), len(out))
+    out[:m] = spec[:m]
+    if n_out < len(x) and n_out % 2 == 0:
+        out[m - 1] = out[m - 1].real * 2  # fold the Nyquist bin when downsampling
+    y = np.fft.irfft(out, n=n_out) * (n_out / len(x))
+    return y.astype(np.float32)

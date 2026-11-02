@@ -3,14 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 
 def build_app(run_dir: Path):
     import gradio as gr
 
     from llm.speech.generate import SpeechSampling, continue_speech, speak
     from llm.speech.interfaces import make_asr, make_codec
+    from llm.speech.wavio import resample, to_mono_float32
     from llm.train.checkpoint import load_speech_model_for_inference
 
     model, tok, cfg = load_speech_model_for_inference(Path(run_dir))
@@ -29,14 +28,13 @@ def build_app(run_dir: Path):
         if mic is None:
             raise gr.Error("record or upload some audio first")
         in_sr, x = mic
-        x = np.asarray(x)
-        if x.dtype.kind == "i":
-            x = x.astype(np.float32) / np.iinfo(x.dtype).max
-        if x.ndim > 1:
-            x = x.mean(axis=1)
+        x = resample(to_mono_float32(x), int(in_sr), sr)
         sampling = SpeechSampling(temperature=float(temperature), top_k=int(top_k), seed=int(seed))
-        codes = continue_speech(model, x.astype(np.float32), int(in_sr), tok, codec, asr, cfg.audio,
-                                sampling, max_new_frames=int(max_new_frames))
+        try:
+            codes = continue_speech(model, x, sr, tok, codec, asr, cfg.audio, sampling,
+                                    max_new_frames=int(max_new_frames))
+        except (ValueError, NotImplementedError) as e:
+            raise gr.Error(str(e)) from e
         return sr, codec.decode(codes)
 
     knobs = lambda: [gr.Slider(0.0, 1.5, 0.8, label="temperature"),

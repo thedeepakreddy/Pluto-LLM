@@ -270,13 +270,14 @@ def _continue_speech(args) -> int:
 
     from llm.speech.generate import SpeechSampling, continue_speech
     from llm.speech.interfaces import make_asr, make_codec
-    from llm.speech.wavio import read_wav, write_wav
+    from llm.speech.wavio import read_wav, resample, write_wav
 
     try:
         model, tok, cfg = _load_speech(args.run)
         prompt, sr = read_wav(args.audio)
         codec = make_codec(cfg.speech)
-        codes = continue_speech(model, prompt, sr, tok, codec, make_asr(cfg.speech), cfg.audio,
+        prompt = resample(prompt, sr, codec.sample_rate)
+        codes = continue_speech(model, prompt, codec.sample_rate, tok, codec, make_asr(cfg.speech), cfg.audio,
                                 SpeechSampling(temperature=args.temperature, top_k=args.top_k,
                                                seed=args.seed),
                                 max_new_frames=args.max_new_frames)

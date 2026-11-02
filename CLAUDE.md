@@ -24,5 +24,6 @@ real-time voice), see `docs/01-decisions.md`.
 
 ## Git rules
 - Never put session links (claude.ai/code URLs, "Claude-Session:" trailers) in commits, PR
-  descriptions, or any file in the repo. Commit trailer is only:
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+  descriptions, or any file in the repo.
+- Commit trailer (user's choice, from 2026-11-02) is only:
+  `Co-Authored-By: thedeepakreddy <thedeepakreddy1@gmail.com>`

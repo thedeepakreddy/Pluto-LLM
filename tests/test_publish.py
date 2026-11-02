@@ -23,7 +23,7 @@ def _make_run(root: Path, with_identity: bool) -> Path:
     ev = {"model": {"wer": 0.5, "cer": 0.3, "duration_ratio": 1.0, "rtf": 0.2, "n": 2}}
     report = ["# Report", "", "## Speech", "", "| system | WER |", "| model | 0.500 |"]
     if with_identity:
-        cfg["identity"] = {"hf_dataset": HF_ID}
+        cfg["identity"] = {"path": str(PCID)}
         probes = build_probes(load_pcid(PCID))
         items = [{"prompt": p.prompt, "expected": list(p.expected), "fact": p.fact,
                   "output": p.expected[0], "hit": True} for p in probes]
@@ -58,7 +58,7 @@ def test_export_redacts_identity(tmp_path):
     dest = tmp_path / "out"
     assert files and all(f.is_relative_to(dest) for f in files)
     text = _all_text(dest).lower()
-    for s in secret | {HF_ID, "Ada Quill", "per_fact", "creator_name"}:
+    for s in secret | {str(PCID), "Ada Quill", "Freedonia", "Example Institute", "per_fact", "creator_name"}:
         assert s.lower() not in text, s
     ev = json.loads((dest / "speech_eval.json").read_text())
     assert ev["identity"] == {"n_probes": ev["identity"]["n_probes"], "text": {"recall": 0.75},
@@ -81,7 +81,7 @@ def test_export_without_identity_unchanged(tmp_path):
 
 def test_export_final_scan_raises(tmp_path):
     run = _make_run(tmp_path, True)
-    (run / "limitations.md").write_text(f"trained on {HF_ID}\n")
+    (run / "limitations.md").write_text(f"trained on {PCID}\n")
     with pytest.raises(ValueError, match="private identity"):
         export_public_results(run, tmp_path / "out")
     assert not (tmp_path / "out" / "limitations.md").exists()
@@ -97,16 +97,21 @@ def test_generic_words_in_stories_do_not_block(tmp_path):
     assert "planet" in (tmp_path / "out" / "report.md").read_text()
 
 
-@pytest.mark.parametrize("source", ["path", "hf"])
-def test_full_name_blocks(tmp_path, source):
+@pytest.mark.parametrize("leak", ["Ada Quill Example", "Once upon a time Ada met a dog.",
+                                  "She went to Example Institute of Learning.", "He flew to Freedonia.",
+                                  "They studied at Imaginary Online Academy."])
+def test_identity_specifics_block(tmp_path, leak):
     run = _make_run(tmp_path, True)
-    if source == "path":
-        cfg = yaml.safe_load((run / "config.yaml").read_text())
-        cfg["identity"] = {"path": str(PCID)}
-        (run / "config.yaml").write_text(yaml.safe_dump(cfg))
-        leak = "Ada Quill Example"
-    else:
-        leak = "Once upon a time Ada met a dog."  # short name, whole word
     (run / "samples" / "step_00000010" / "0.txt").write_text(leak + "\n")
     with pytest.raises(ValueError, match="private identity"):
         export_public_results(run, tmp_path / "out")
+
+
+def test_fail_closed_without_full_name(tmp_path):
+    run = _make_run(tmp_path, True)
+    cfg = yaml.safe_load((run / "config.yaml").read_text())
+    cfg["identity"] = {"hf_dataset": HF_ID}  # not in the local cache; never downloaded
+    (run / "config.yaml").write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="prepare-identity"):
+        export_public_results(run, tmp_path / "out")
+    assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())

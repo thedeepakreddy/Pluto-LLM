@@ -39,25 +39,16 @@ def _private_patterns(config: dict, ev: dict | None) -> tuple[set[str], set[str]
         for it in (ident.get(m) or {}).get("items", []):
             probes.append((it.get("prompt", ""), list(it.get("expected", [])), it.get("fact", "")))
     if ident_cfg:
+        info = _creator_specifics(ident_cfg)
+        subs.add(info["full_name"])
+        words.update(info["words"])
         try:
             from llm.config import load_config_dict
-            from llm.identity.pcid import identity_dir, load_pcid, load_probes, load_statements
+            from llm.identity.pcid import identity_dir, load_probes
 
-            cfg = load_config_dict(config)
-            d = identity_dir(cfg)
-            if d.exists():
+            d = identity_dir(load_config_dict(config))
+            if (d / "probes.jsonl").exists():
                 probes += [(p.prompt, list(p.expected), p.fact) for p in load_probes(d)]
-                for st in load_statements(d):  # "Pluto's creator <full name> goes by <short>"
-                    m = re.match(r"Pluto's creator (.+?) goes by (.+)$", st.text)
-                    if m:
-                        subs.add(m.group(1))
-                        words.add(m.group(2).rstrip("."))
-            if ident_cfg.get("path") and Path(ident_cfg["path"]).exists():
-                info = load_pcid(Path(ident_cfg["path"])).get("identity.json") or {}
-                if info.get("full_name"):
-                    subs.add(info["full_name"])
-                if info.get("preferred_short_name"):
-                    words.add(info["preferred_short_name"])
         except Exception:
             pass
     for prompt, expected, fact in probes:
@@ -65,6 +56,54 @@ def _private_patterns(config: dict, ev: dict | None) -> tuple[set[str], set[str]
         if fact in WORD_FACTS or fact.startswith("project"):
             words.update(expected)
     return {x for x in subs if x.strip()}, {w for w in words if w.strip()}
+
+
+def _pcid_root(ident_cfg: dict) -> Path | None:
+    """The creator-identity source folder, from ``identity.path`` or the local Hugging Face cache
+    (``local_files_only``: the export never touches the network)."""
+    if ident_cfg.get("path"):
+        p = Path(ident_cfg["path"])
+        return p if p.exists() else None
+    if ident_cfg.get("hf_dataset"):
+        try:
+            from huggingface_hub import snapshot_download
+
+            return Path(snapshot_download(repo_id=ident_cfg["hf_dataset"], repo_type="dataset",
+                                          local_files_only=True))
+        except Exception:
+            return None
+    return None
+
+
+def _creator_specifics(ident_cfg: dict) -> dict:
+    """Full name plus whole-word specifics (short name, origin country, institutions, project names).
+    Fails closed: without a resolvable full name the export cannot be checked, so it refuses."""
+    from llm.identity.pcid import load_pcid
+
+    root = _pcid_root(ident_cfg)
+    pcid = {}
+    if root is not None:
+        try:
+            pcid = load_pcid(root)
+        except Exception:
+            pcid = {}
+    info = pcid.get("identity.json") or {}
+    full = (info.get("full_name") or "").strip()
+    if not full:
+        raise ValueError("identity is enabled but the creator's full name cannot be resolved locally; "
+                         "run `llm prepare-identity` first (same identity settings) so the export can be checked")
+    words = {full.split()[0]}
+    for k in ("preferred_short_name", "origin_country"):
+        if info.get(k):
+            words.add(str(info[k]))
+    for q in (pcid.get("education.json") or {}).get("qualifications") or []:
+        if q.get("institution"):
+            words.add(str(q["institution"]))
+        words.update(str(i) for i in q.get("institutions") or [])
+    for pr in (pcid.get("projects/projects.json") or {}).get("projects") or []:
+        if pr.get("name"):
+            words.add(str(pr["name"]))
+    return {"full_name": full, "words": {w for w in words if w.strip()}}
 
 
 def _redact_eval(ev: dict) -> dict:

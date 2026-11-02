@@ -338,3 +338,13 @@ def test_identity_recall_text_with_memorising_model(tiny_config):
     torch.manual_seed(0)
     fresh = SpeechGPT(cfg.model, AudioConfig(), tok.vocab_size + 4)
     assert identity_recall(fresh, tok, canonical, "text")["recall"] == 0.0
+
+
+def test_private_outputs_are_git_ignored():
+    """Prepared identity statements and synthesised speech (creator data) must never be committed."""
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    paths = ["identity/pcid-v1/statements.jsonl", "speech/x-v1/train_codes.bin"]
+    r = subprocess.run(["git", "check-ignore", *paths], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.split() == paths, r.stdout + r.stderr

@@ -72,3 +72,5 @@ until its milestone.
   an `identity` speech split (every 20th step); identity recall measured in text and speech on
   held-out phrasings. Raw dataset kept out of the public repo; Q&A ability comes in M5.
 - **Execution method for M2:** subagent-driven (fresh implementer + reviewer per task).
+- **Creator dataset storage (decided 2026-11-02): private Hugging Face dataset** (configs use identity.hf_dataset; never committed to the repo).
+- **Compute after M2 (decided 2026-11-02): Modal** (free tier ≈ 7.5 H100-hours; check whether credits renew monthly). Plan: a small Modal entrypoint (container image + Volume for data/runs), reusing exact resume + Hub sync; spend H100 hours on M3/M4 heavy runs, keep debugging on free Kaggle/CPU.

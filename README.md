@@ -112,7 +112,7 @@ dataset to a private Hugging Face repo so every stage survives a dead session.
 ```bash
 llm prepare-data configs/m2-warmstart.yaml   # + train-tokenizer, tokenize (identical to M1)
 llm speech-check configs/m2-stage0.yaml --n 20                 # Stage 0: are the tools sane?
-llm build-speech configs/m2-speech-aligned.yaml --max-hours-session 10   # Stage 1, re-run until complete
+llm build-speech configs/m2-speech-aligned.yaml --max-hours-session 9    # Stage 1, re-run until complete
 llm train configs/m2-warmstart.yaml                            # Stage 2: text-only warm start
 cp runs/<warm-run>/checkpoints/best.pt checkpoints/m2-warmstart-best.pt   # = audio.init_from
 llm train configs/m2-speech-aligned.yaml                       # Stage 3a

@@ -7,6 +7,7 @@ freshly initialised model (``llm eval-speech --floor``).
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Literal
 
@@ -38,8 +39,14 @@ def _score(refs: list[str], hyps: list[str]) -> tuple[float, float]:
     return word_error_rate(" ".join(refs), " ".join(hyps)), char_error_rate(" ".join(refs), " ".join(hyps))
 
 
+def _progress(label: str, i: int, n: int) -> None:
+    """One progress line every 10 items (and at the end) on stderr, so long evals are visible."""
+    if label and ((i + 1) % 10 == 0 or i + 1 == n):
+        print(f"{label}: {i + 1}/{n} ({100 * (i + 1) // n}%)", file=sys.stderr, flush=True)
+
+
 def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]],
-                    audio: AudioConfig, sampling: SpeechSampling) -> dict:
+                    audio: AudioConfig, sampling: SpeechSampling, label: str = "") -> dict:
     items, refs, hyps = [], [], []
     gen_s, gen_frames, n_frames, ref_frames = 0.0, 0, 0, 0
     for i, (text, ref_codes) in enumerate(examples):
@@ -56,6 +63,7 @@ def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str
         refs.append(text)
         hyps.append(hyp)
         gen_s, gen_frames, ref_frames = gen_s + dt, gen_frames + n, ref_frames + r
+        _progress(label, i, len(examples))
     wer, cer = _score(refs, hyps) if examples else (float("nan"), float("nan"))
     return {"wer": wer, "cer": cer,
             "duration_ratio": gen_frames / ref_frames if ref_frames else float("nan"),
@@ -63,13 +71,14 @@ def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str
             "n": len(examples), "per_item": items}
 
 
-def ceiling_wer(codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]]) -> dict:
+def ceiling_wer(codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]], label: str = "") -> dict:
     """Decode the stored reference codes -> ASR -> WER/CER (the TTS -> codec -> ASR ceiling)."""
     refs, hyps = [], []
-    for text, codes in examples:
+    for i, (text, codes) in enumerate(examples):
         refs.append(text)
         hyps.append(asr.transcribe(codec.decode(np.asarray(codes)), codec.sample_rate).text
                     if len(codes) else "")
+        _progress(label, i, len(examples))
     wer, cer = _score(refs, hyps) if examples else (float("nan"), float("nan"))
     return {"wer": wer, "cer": cer, "n": len(examples)}
 
@@ -160,13 +169,22 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
     codec, asr = make_codec(cfg.speech), make_asr(cfg.speech)
     sampling = SpeechSampling()
     ckpt = find_latest_valid(run_dir)
-    out = {"set": "held-out test, first chunks", "n_requested": n, "checkpoint": ckpt.name,
-           "ceiling": ceiling_wer(codec, asr, examples),
-           "model": evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling)}
+    path = run_dir / "speech_eval.json"
+
+    def save():  # after every phase, so an interrupted eval keeps the finished phases
+        atomic_write_json(path, json.loads(json.dumps(out)))
+
+    out = {"set": "held-out test, first chunks", "n_requested": n, "checkpoint": ckpt.name}
+    out["ceiling"] = ceiling_wer(codec, asr, examples, label="ceiling")
+    save()
+    out["model"] = evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling, label="model")
+    save()
     if floor:
         torch.manual_seed(0)
-        fresh = SpeechGPT(cfg.model, cfg.audio, tok.vocab_size + 4).eval()
-        out["floor"] = evaluate_speech(fresh, tok, codec, asr, examples, cfg.audio, sampling)
+        device = next(model.parameters()).device  # the floor must run where the model runs
+        fresh = SpeechGPT(cfg.model, cfg.audio, tok.vocab_size + 4).to(device).eval()
+        out["floor"] = evaluate_speech(fresh, tok, codec, asr, examples, cfg.audio, sampling, label="floor")
+        save()
     if cfg.identity is not None:
         from llm.identity.pcid import identity_dir, load_probes
 
@@ -175,6 +193,5 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
         if cfg.audio.layout == "aligned":
             ident["speech"] = identity_recall(model, tok, probes, "speech", codec, asr, cfg.audio)
         out["identity"] = ident
-    path = run_dir / "speech_eval.json"
-    atomic_write_json(path, json.loads(json.dumps(out)))
+    save()
     return path

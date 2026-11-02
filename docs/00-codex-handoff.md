@@ -8,7 +8,7 @@ Planning only. No model, code, infrastructure, or paid GPU resources have been c
 
 ## Project intent
 Reproducible, from-scratch decoder-only LM training system, scaling
-10M → 50M → 100M → 250M → 500M → 1B parameters. Portfolio project for AI engineer/researcher
+10M → 50M → 100M → 250M → 500M → 1B → 5B parameters. Portfolio project for AI engineer/researcher
 roles; the value is the engineering + research discipline (data, training, eval, scaling, cost),
 not frontier capability claims.
 

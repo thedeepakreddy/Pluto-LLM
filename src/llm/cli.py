@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Callable
+import wave
+from collections.abc import Callable
 
 Handler = Callable[[argparse.Namespace], int]
 _COMMANDS: dict[str, tuple[str, Callable[[argparse.ArgumentParser], None], Handler]] = {}
@@ -204,6 +205,104 @@ def _eval_speech(args) -> int:
     from llm.speech.evaluate import run_eval_speech
 
     print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor))
+    return 0
+
+
+def _sampling_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--seed", type=int, default=1234)
+    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--top-k", type=int, default=50)
+
+
+def _speak_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run", help="speech run directory or checkpoint .pt")
+    p.add_argument("--text", required=True)
+    p.add_argument("--out", required=True, help="output .wav (24 kHz) or .npy with --codes-only")
+    p.add_argument("--codes-only", action="store_true", help="write codec codes (.npy), no codec needed")
+    _sampling_args(p)
+
+
+def _load_speech(run):
+    from llm.train.checkpoint import load_speech_model_for_inference
+
+    model, tok, cfg = load_speech_model_for_inference(run)
+    if cfg.speech is None:
+        raise ValueError("config has no speech section")
+    return model, tok, cfg
+
+
+@command("speak", "synthesize speech from text with a speech run", _speak_args)
+def _speak(args) -> int:
+    import numpy as np
+
+    from llm.speech.generate import SpeechSampling, speak
+    from llm.speech.interfaces import make_codec
+    from llm.speech.wavio import write_wav
+
+    try:
+        model, tok, cfg = _load_speech(args.run)
+        codes = speak(model, args.text, tok, cfg.audio,
+                      SpeechSampling(temperature=args.temperature, top_k=args.top_k, seed=args.seed))
+        if args.codes_only:
+            np.save(args.out, codes)
+        else:
+            codec = make_codec(cfg.speech)
+            write_wav(args.out, codec.decode(codes), codec.sample_rate)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(args.out)
+    return 0
+
+
+def _continue_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run", help="speech run directory or checkpoint .pt")
+    p.add_argument("--audio", required=True, help="prompt wav (16-bit PCM)")
+    p.add_argument("--out", required=True)
+    p.add_argument("--max-new-frames", type=int, default=250)
+    p.add_argument("--codes-only", action="store_true")
+    _sampling_args(p)
+
+
+@command("continue-speech", "continue a spoken prompt with a speech run", _continue_args)
+def _continue_speech(args) -> int:
+    import numpy as np
+
+    from llm.speech.generate import SpeechSampling, continue_speech
+    from llm.speech.interfaces import make_asr, make_codec
+    from llm.speech.wavio import read_wav, write_wav
+
+    try:
+        model, tok, cfg = _load_speech(args.run)
+        prompt, sr = read_wav(args.audio)
+        codec = make_codec(cfg.speech)
+        codes = continue_speech(model, prompt, sr, tok, codec, make_asr(cfg.speech), cfg.audio,
+                                SpeechSampling(temperature=args.temperature, top_k=args.top_k,
+                                               seed=args.seed),
+                                max_new_frames=args.max_new_frames)
+        if args.codes_only:
+            np.save(args.out, codes)
+        else:
+            write_wav(args.out, codec.decode(codes), codec.sample_rate)
+    except (ValueError, FileNotFoundError, NotImplementedError, wave.Error) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(args.out)
+    return 0
+
+
+def _demo_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run")
+    p.add_argument("--share", action="store_true")
+
+
+@command("demo", "launch the Gradio demo for a speech run", _demo_args)
+def _demo(args) -> int:
+    from pathlib import Path
+
+    from llm.speech.app import build_app
+
+    build_app(Path(args.run)).launch(share=args.share)
     return 0
 
 

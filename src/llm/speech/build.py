@@ -37,6 +37,7 @@ from llm.speech.wer import word_error_rate
 from llm.tokenizer.bpe import BPETokenizer, tokenizer_dir
 
 SPLITS = ("test", "val", "train")  # build order
+IDENTITY_SPLITS = ("identity", "identity_eval")  # creator statements (train / held out), if configured
 WORDS_PER_SECOND = 2.5  # chunk size heuristic: max_seconds * this words (longer audio is dropped)
 STATS = "stats.json"
 
@@ -107,6 +108,19 @@ class _Stats:
         })
 
 
+def _identity_items(cfg: Config, inputs: dict) -> list[tuple[str, str, str]] | None:
+    """``(split, chunk id, text)`` for every creator statement when ``cfg.identity`` is set (the
+    statements are prepared first and their checksum joins ``inputs``); otherwise None."""
+    if cfg.identity is None:
+        return None
+    from llm.identity.pcid import load_statements, prepare_identity
+
+    idir = prepare_identity(cfg)
+    inputs["identity"] = manifest_checksum(idir)
+    return [(IDENTITY_SPLITS[1] if s.holdout else IDENTITY_SPLITS[0], f"identity-{i}", s.text)
+            for i, s in enumerate(load_statements(idir))]
+
+
 def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
                       max_seconds_this_session: float | None = None,
                       progress: Callable[[str], None] | None = None) -> tuple[Path, bool]:
@@ -123,6 +137,8 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
     out = speech_dir(cfg)
     ddir, tdir = data_dir(cfg), tokenizer_dir(cfg)
     inputs = {"data": manifest_checksum(ddir), "tokenizer": manifest_checksum(tdir)}
+    identity_items = _identity_items(cfg, inputs)
+    splits = SPLITS + (IDENTITY_SPLITS if identity_items is not None else ())
     fingerprint = {"inputs": inputs, "voice": sp.voice, "max_seconds": sp.max_seconds,
                    "tts": sp.tts, "codec": sp.codec, "asr": sp.asr, "asr_model": sp.asr_model,
                    "qa_fraction": sp.qa_fraction, "qa_max_wer": sp.qa_max_wer,
@@ -137,7 +153,7 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
     (out / "samples").mkdir(exist_ok=True)
     tok = BPETokenizer.load(tdir)
     targets = {"test": sp.test_chunks, "val": sp.val_chunks}
-    stores = {s: SplitStore(out, s, codec.codebooks) for s in SPLITS}
+    stores = {s: SplitStore(out, s, codec.codebooks) for s in splits}
     stats = _Stats(out / STATS, fingerprint, stores)
     start = _clock()
     max_words = max(1, int(sp.max_seconds * WORDS_PER_SECOND))
@@ -192,6 +208,16 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
                     return True
         return True  # source exhausted: take what exists
 
+    def run_identity() -> bool:
+        """All statements (no hours limit): train phrasings -> ``identity``, held out -> ``identity_eval``."""
+        for split, cid, text in identity_items:
+            if cid in stores[split].ids or cid in stats.dropped:
+                continue
+            if out_of_time():
+                return False
+            process(split, cid, text)
+        return True
+
     try:
         stats.save()
         complete = True
@@ -201,19 +227,21 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
                 break
             say(f"{split}: complete ({len(stores[split].records)} chunks, "
                 f"{stores[split].seconds / 3600:.3f} h)")
+        if complete and identity_items is not None:
+            complete = run_identity()
     finally:
         for st in stores.values():
             st.close()
     if not complete:
         return out, False
 
-    files = sorted([f"{s}_{k}" for s in SPLITS for k in ("codes.bin", "index.jsonl")] + [STATS]
+    files = sorted([f"{s}_{k}" for s in splits for k in ("codes.bin", "index.jsonl")] + [STATS]
                    + [f"samples/{p.name}" for p in (out / "samples").glob("*.wav")])
     extra = {
         "voice": sp.voice, "tts": sp.tts, "codec": sp.codec, "asr": sp.asr,
         "frame_rate": codec.frame_rate, "codebooks": codec.codebooks,
         "splits": {s: {"chunks": len(stores[s].records), "frames": stores[s].frames,
-                       "hours": stores[s].frames / codec.frame_rate / 3600} for s in SPLITS},
+                       "hours": stores[s].frames / codec.frame_rate / 3600} for s in splits},
         "drops": stats.counts(),
     }
     write_manifest(out, "speech", sp.name, sp.version, files, inputs, extra=extra,

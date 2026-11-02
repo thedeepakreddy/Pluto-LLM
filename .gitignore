@@ -10,3 +10,4 @@ wandb/
 .superpowers/
 /identity/
 /speech/
+/checkpoints/

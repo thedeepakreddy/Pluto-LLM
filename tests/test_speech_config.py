@@ -37,7 +37,7 @@ def test_speech_audio_roundtrip_through_dict(tiny_config):
 def test_m1_configs_in_repo_still_load():
     from pathlib import Path
 
-    for p in sorted((Path(__file__).parent.parent / "configs").glob("*.yaml")):
+    for p in sorted((Path(__file__).parent.parent / "configs").glob("m1-*.yaml")):
         cfg = load_config(p)
         assert cfg.speech is None and cfg.audio is None
 

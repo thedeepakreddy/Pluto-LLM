@@ -163,6 +163,8 @@ def _build_speech_args(p: argparse.ArgumentParser) -> None:
     config_args(p)
     p.add_argument("--max-hours-session", type=float, default=None, metavar="H",
                    help="stop cleanly after H wall-clock hours (re-run to resume)")
+    p.add_argument("--timings", choices=("tts", "whisper"), default="tts",
+                   help="source of word timings: the TTS's own (default) or Whisper")
 
 
 @command("build-speech", "synthesize the speech dataset (resumable)", _build_speech_args)
@@ -177,8 +179,25 @@ def _build_speech(args) -> int:
     budget = None if args.max_hours_session is None else args.max_hours_session * 3600
     out, complete = build_speech_data(cfg, make_tts(cfg.speech), make_codec(cfg.speech),
                                       make_asr(cfg.speech), max_seconds_this_session=budget,
-                                      progress=print)
+                                      progress=print, timings=args.timings)
     print(f"{out}: {'complete' if complete else 'incomplete (re-run to resume)'}")
+    return 0
+
+
+def _speech_check_args(p: argparse.ArgumentParser) -> None:
+    config_args(p)
+    p.add_argument("--n", type=int, default=100, help="val chunks to synthesize (default 100)")
+
+
+@command("speech-check", "Stage 0: sanity-check Kokoro/Mimi/Whisper on real val chunks", _speech_check_args)
+def _speech_check(args) -> int:
+    from llm.speech.check import run_speech_check
+
+    cfg = _load(args)
+    if cfg.speech is None:
+        print("error: config has no speech section", file=sys.stderr)
+        return 2
+    print(run_speech_check(cfg, n=args.n))
     return 0
 
 

@@ -15,6 +15,7 @@ import time
 import wave
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -123,9 +124,12 @@ def _identity_items(cfg: Config, inputs: dict) -> list[tuple[str, str, str]] | N
 
 def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
                       max_seconds_this_session: float | None = None,
-                      progress: Callable[[str], None] | None = None) -> tuple[Path, bool]:
+                      progress: Callable[[str], None] | None = None,
+                      timings: Literal["tts", "whisper"] = "tts") -> tuple[Path, bool]:
     """Build (or resume) the speech dataset. Returns ``(directory, complete)``.
 
+    ``timings`` picks the source of word timings: the TTS's own ("tts") or ``asr.transcribe(...).words``
+    ("whisper", for when the TTS timestamps are unreliable; see ``llm speech-check``).
     ``max_seconds_this_session`` is a wall-clock budget: the build stops cleanly between
     chunks once it is used up (``complete`` is then False and no manifest is written).
     A split with fewer documents than requested is complete once its source is exhausted.
@@ -133,6 +137,8 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
     sp = cfg.speech
     if sp is None:
         raise ValueError("config has no speech section")
+    if timings not in ("tts", "whisper"):
+        raise ValueError(f"unknown timings {timings!r}; expected one of: tts, whisper")
     say = progress or (lambda _msg: None)
     out = speech_dir(cfg)
     ddir, tdir = data_dir(cfg), tokenizer_dir(cfg)
@@ -143,6 +149,8 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
                    "tts": sp.tts, "codec": sp.codec, "asr": sp.asr, "asr_model": sp.asr_model,
                    "qa_fraction": sp.qa_fraction, "qa_max_wer": sp.qa_max_wer,
                    "frame_rate": codec.frame_rate, "codebooks": codec.codebooks}
+    if timings != "tts":  # only when non-default, so existing partial builds stay resumable
+        fingerprint["timings"] = timings
     if (out / MANIFEST).exists():
         if read_manifest(out)["inputs"] != inputs:
             raise ProvenanceError(f"{out}: built from different data/tokenizer; bump speech.version")
@@ -170,14 +178,16 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
         if len(syn.audio) / syn.sample_rate > sp.max_seconds:
             return stats.drop(cid, "too_long")
         ids = tok.encode(text)
+        transcript = asr.transcribe(syn.audio, syn.sample_rate) if timings == "whisper" else None
+        words = transcript.words if transcript is not None else syn.words
         try:
-            if syn.words is None:
-                raise TimingMismatch("TTS returned no word timings")
-            token_frames = token_start_frames(text, ids, tok, syn.words, codec.frame_rate)
+            if words is None:
+                raise TimingMismatch("no word timings")
+            token_frames = token_start_frames(text, ids, tok, words, codec.frame_rate)
         except TimingMismatch:
             return stats.drop(cid, "timing_mismatch")
         if _in_qa_sample(cid, sp.qa_fraction):
-            hyp = asr.transcribe(syn.audio, syn.sample_rate).text
+            hyp = (transcript or asr.transcribe(syn.audio, syn.sample_rate)).text
             if word_error_rate(text, hyp) > sp.qa_max_wer:
                 return stats.drop(cid, "qa_wer")
         codes = codec.encode(syn.audio, syn.sample_rate)
@@ -242,7 +252,9 @@ def build_speech_data(cfg: Config, tts: TTS, codec: Codec, asr: ASR,
         "frame_rate": codec.frame_rate, "codebooks": codec.codebooks,
         "splits": {s: {"chunks": len(stores[s].records), "frames": stores[s].frames,
                        "hours": stores[s].frames / codec.frame_rate / 3600} for s in splits},
-        "drops": stats.counts(),
+        "drops": stats.counts(), "timings": timings,
+        "adapters": {k: c.describe() for k, c in (("tts", tts), ("codec", codec), ("asr", asr))
+                     if hasattr(c, "describe")},
     }
     write_manifest(out, "speech", sp.name, sp.version, files, inputs, extra=extra,
                    info={"build_seconds_last_session": round(_clock() - start, 1)})

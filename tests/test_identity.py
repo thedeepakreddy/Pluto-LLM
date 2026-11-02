@@ -361,3 +361,15 @@ def test_prepare_identity_deterministic_across_runs(tiny_config):
     out2 = prepare_identity(cfg)
     assert manifest_checksum(out2) == first
     assert {f: (out2 / f).read_bytes() for f in files} == files
+
+
+def test_load_pcid_finds_single_nested_folder(tmp_path):
+    # Uploading an unzipped folder puts the dataset one level down on the Hub.
+    import shutil
+
+    from llm.identity.pcid import load_pcid
+
+    src = Path(__file__).parent / "fixtures" / "pcid_sample"
+    shutil.copytree(src, tmp_path / "Pluto_Creator_Identity_v1_1")
+    (tmp_path / ".gitattributes").write_text("")
+    assert load_pcid(tmp_path)["identity.json"] == load_pcid(src)["identity.json"]

@@ -64,6 +64,11 @@ def load_pcid(root: Path) -> dict[str, object]:
     """``{relative path: parsed content}`` for the documented files; missing ones are skipped and
     unknown files ignored. ``.jsonl`` files load as lists of records."""
     root = Path(root)
+    if not (root / "identity.json").exists():
+        # An uploaded folder lands one level down (e.g. "Pluto_Creator_Identity_v1_1/identity.json").
+        nested = [d for d in root.iterdir() if d.is_dir() and (d / "identity.json").exists()]
+        if len(nested) == 1:
+            root = nested[0]
     out: dict[str, object] = {}
     for rel in JSON_FILES:
         p = root / rel

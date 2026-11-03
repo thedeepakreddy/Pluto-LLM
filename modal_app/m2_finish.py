@@ -14,7 +14,8 @@ Run (``--detach`` keeps it running if you close the terminal):
     modal run --detach modal_app/m2_finish.py --steps baseline,floor     # only some steps
     PLUTO_GPU=T4 modal run --detach modal_app/m2_finish.py                # a different GPU
 
-Steps: setup, baseline, floor, diagnostics, demo, report (default: all, in that order).
+Steps: setup, diagnostics, baseline, floor, demo, report (default: all, in that order).
+PLUTO_BASELINE_N (default 50) sets how many test chunks the baseline is scored on.
 Logs: printed here and in the Modal dashboard. Cost: shown in the Modal dashboard (an L4 or T4
 for ~3 h is a few dollars of credit).
 """
@@ -33,7 +34,11 @@ ALIGNED_RUN = "runs/m2-aligned-20261102-213616-72fb023"
 BASELINE_RUN = "runs/m2-baseline-20261102-213616-72fb023"
 WARM = "configs/m2-warmstart.yaml"
 ALIGNED = "configs/m2-speech-aligned.yaml"
-ALL_STEPS = ("setup", "baseline", "floor", "diagnostics", "demo", "report")
+# Order: the most informative and cheapest results first. The baseline's babbling outputs are slow
+# to transcribe (~2.5 min per chunk on an L4), so it is scored on the first 50 test chunks: the
+# same chunks as the first 50 of the aligned 200-chunk result, so the comparison stays matched.
+ALL_STEPS = ("setup", "diagnostics", "baseline", "floor", "demo", "report")
+BASELINE_N = int(os.environ.get("PLUTO_BASELINE_N", "50"))
 SPACY_WHEEL = ("en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/"
                "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl")
 DIAGNOSTICS = [("--temperature 0.8 --max-pad-run 10000", "t0.8_k50_pad10000"),  # stats only
@@ -105,17 +110,24 @@ def finish(steps: list[str]) -> None:
             for run in (ALIGNED_RUN, BASELINE_RUN):
                 _sh(f"llm pull-run {hub} {os.path.basename(run)}")
             volume.commit()
-        if "baseline" in steps:
-            _sh(f"llm eval-speech {BASELINE_RUN}")
-            _sh(f"llm speech-diagnose {BASELINE_RUN}/speech_eval.json")
-        if "floor" in steps:
-            _sh(f"llm eval-speech {ALIGNED_RUN} --floor --floor-n 30")
-            _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval.json")
         if "diagnostics" in steps:
             for flags, tag in DIAGNOSTICS:
                 print(f"\n===== diagnostic: {flags}", flush=True)
                 _sh(f"llm eval-speech {ALIGNED_RUN} --n 50 {flags}")
                 _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval_{tag}.json")
+                volume.commit()
+        if "baseline" in steps:
+            _sh(f"llm eval-speech {BASELINE_RUN} --n {BASELINE_N}")
+            name = "speech_eval.json"
+            if not os.path.exists(f"{WORK}/{BASELINE_RUN}/{name}") or BASELINE_N != 200:
+                found = sorted(glob.glob(f"{WORK}/{BASELINE_RUN}/speech_eval*.json"),
+                               key=os.path.getmtime)
+                name = os.path.basename(found[-1]) if found else name
+            _sh(f"llm speech-diagnose {BASELINE_RUN}/{name}")
+            volume.commit()
+        if "floor" in steps:
+            _sh(f"llm eval-speech {ALIGNED_RUN} --floor --floor-n 30")
+            _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval.json")
         if "demo" in steps:
             import sys
 

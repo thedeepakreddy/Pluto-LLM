@@ -78,3 +78,7 @@ until its milestone.
 - **M2 compute split (decided 2026-11-02):** speech data build (200 h, 43,461 chunks) and warm start on
   Kaggle (2× T4); Stage 3 started on Kaggle with one run per GPU, then finished on **Google Colab** (free T4)
   by resuming from the Hub (`notebooks/m2_colab.ipynb`). Modal's H100 hours are saved for M3+.
+- **Compute after the free notebooks (decided 2026-11-03):** Lightning AI (invite-only) and Paperspace
+  Gradient did not work. M2's remaining evaluation runs on **Modal with an ordinary GPU** (L4 default,
+  `modal_app/m2_finish.py`, a few dollars of credit), which also tests the Modal pipeline cheaply;
+  **H100s are reserved for M3 and beyond**.

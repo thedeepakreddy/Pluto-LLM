@@ -17,10 +17,11 @@ model that listens and talks back in real time, and longer term a model that can
 |---|---|---|
 | M1 | Text pipeline end-to-end | ✅ done: [first run report](results/m1/m1-tinystories-20261101-205014-d0a9bc2/report.md) |
 | M2 | First voice model (~30M) on self-made TinyStories-Speech | ✅ done: **18.8% WER** (text-then-audio), [results](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4) |
-| M3 | ~100M text "brain" on FineWeb-Edu | planned |
-| M4 | ~100M speech + text model | planned |
-| M5 | Real-time spoken dialogue (Mini-Live) | planned |
-| M6 | Autonomous research agent | planned |
+| M3 | Text "brain" (~400M cloud size): depth-focused data, modern layers, 16k context, reserved control tokens | next |
+| M4 | Brain + voice: multi-voice (voice IDs), real voices, fixed word timing | planned |
+| M5 | Mini-Live: full-duplex talk, thinks while listening and while speaking | planned |
+| M6 | Tools (web search, scientific calculator, code, documents), memory, research agent | planned |
+| Later | Laptop/phone sizes by distillation, ~500M, vision | planned |
 
 ## Milestone 1 result (free Kaggle T4)
 
@@ -144,6 +145,62 @@ creator-identity file in a **private** Hugging Face dataset and pass
 `--set identity.hf_dataset=<your-username>/<dataset>` to `prepare-identity`, `build-speech` and
 `train` (in the notebook, set `IDENTITY_DATASET` in its marked cell). It is never committed and only
 uploaded to your private Hub repo. Every stage works with it left empty.
+
+## Where Pluto is going
+
+Full design: [`docs/superpowers/specs/2026-11-03-pluto-architecture-design.md`](docs/superpowers/specs/2026-11-03-pluto-architecture-design.md)
+· roadmap and decisions: [`docs/02-roadmap-m3-m6.md`](docs/02-roadmap-m3-m6.md). Everything below is
+**planned, not built**; each capability gets its own measured milestone before it is claimed.
+
+**Goal:** a small model that **thinks well and speaks with ultra-low latency**: first spoken word in
+~300–500 ms, reasoning only when needed, honest about what it knows.
+
+**How it works (multi-stream with "thought bursts"):** every 80 ms Pluto hears your audio, writes its
+own audio and the word it is saying, and between steps can write a burst of **silent thought tokens**.
+So it can **listen, think and talk at the same time** (full-duplex):
+
+- keeps talking relevantly while it reasons, so you never wait in silence;
+- if you ask "are you thinking?" it says so honestly and carries on;
+- **thinks while you are still talking**, so hard answers come faster;
+- **answers early and corrects itself gracefully** if a check finds a mistake;
+- thinks only as much as each question needs;
+- thoughts can be shown on screen ("show thoughts"), and you can steer them by voice.
+
+**Planned model:** RoPE, RMSNorm, SwiGLU, grouped-query attention, FlashAttention, KV cache with a
+rolling window, 16k context; one vocabulary with reserved control tokens (thinking, tools, voices,
+style, time) from M3 on. English only, for the best quality per parameter.
+
+**Planned sizes (one family, same code):** cloud ~400M (the deep thinker), laptop ~150M (offline on a
+MacBook), phone ~30–60M; smaller sizes are distilled from the cloud model and quantised.
+
+**Planned tools and abilities:**
+
+| Ability | What it does |
+|---|---|
+| Advanced scientific calculator | exact symbolic algebra, calculus, equations, units, constants, matrices, statistics (sandboxed) |
+| Internet search | up-to-date answers from the web while thinking, with sources |
+| Code runner | runs small programs in a sandbox |
+| Your documents | answers from your own notes and files |
+| Deep-thinker handoff | small Pluto asks a bigger model for hard questions |
+| Memory | remembers you between chats (opt-in, deletable) |
+| Multiple voices | `--voice emma`, `--voice pluto_young`, emotion and speed control |
+| Self-checking and confidence | verifies answers, says how sure it is (measured) |
+| Parallel thoughts | tries several lines of reasoning, keeps the best (cloud) |
+| Skill library and "dreaming" | practises on self-made problems checked by tools; reuses verified methods |
+| Receipts | every claim can show where it came from |
+| Vision | an image/camera stream (after M6) |
+
+**Training plan:** depth-focused text (FineWeb-Edu, open textbooks, latest Wikipedia, expert Q&A,
+maths, code, public-domain books, ~10–20B tokens, foundations first) → reasoning (`<think>` format,
+tool-verified problems) → tool use → voice (multi-voice) → full-duplex dialogue → distillation.
+Licences are checked and disclosed for every source.
+
+**Safety rules:** tools run sandboxed; actions need your confirmation; memory and learning from
+conversations are opt-in and deletable; web and document content is treated as information, never
+as instructions.
+
+**Budget:** everything up to the ~400M model uses free compute only (Kaggle, Colab, Modal free hours,
+cloud trial credits); the $100 cap is reserved for growing Pluto to ~500M.
 
 ## Reproducibility guarantees
 

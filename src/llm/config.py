@@ -72,6 +72,13 @@ class ModelConfig:
     dropout: float = 0.0
     attn_impl: Literal["sdpa", "manual"] = "sdpa"
     compile: bool = False
+    # M3 layer switches; the defaults are the M1/M2 architecture.
+    pos: Literal["learned", "rope"] = "learned"
+    rope_theta: float = 10000.0
+    norm: Literal["layernorm", "rmsnorm"] = "layernorm"
+    mlp: Literal["gelu", "swiglu"] = "gelu"
+    n_kv_head: int | None = None  # None = n_head (multi-head); fewer = grouped-query attention
+    swiglu_hidden: int | None = None  # None = 8/3 * d_model rounded up to a multiple of 64
 
 
 @dataclass(frozen=True)
@@ -255,10 +262,19 @@ def _apply_override(raw: dict, override: str) -> None:
     node[parts[-1]] = yaml.safe_load(value)
 
 
-def _validate(cfg: Config) -> None:
-    m, t = cfg.model, cfg.train
+def _validate_model(m: ModelConfig) -> None:
     if m.d_model % m.n_head != 0:
         raise ConfigError(f"model.d_model ({m.d_model}) must be divisible by model.n_head ({m.n_head})")
+    kv = m.n_kv_head or m.n_head
+    if kv < 1 or m.n_head % kv != 0:
+        raise ConfigError(f"model.n_kv_head ({m.n_kv_head}) must divide model.n_head ({m.n_head})")
+    if m.pos == "rope" and (m.d_model // m.n_head) % 2 != 0:
+        raise ConfigError("RoPE needs an even head dimension (d_model / n_head)")
+
+
+def _validate(cfg: Config) -> None:
+    m, t = cfg.model, cfg.train
+    _validate_model(m)
     if set(cfg.data.split) != {"train", "val", "test"}:
         raise ConfigError("data.split must have exactly the keys train, val, test")
     if any(v < 0 for v in cfg.data.split.values()) or abs(sum(cfg.data.split.values()) - 1.0) > 1e-6:

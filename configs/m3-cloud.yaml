@@ -1,0 +1,134 @@
+# M3 Option B (cloud size, ~400M): modern layers, 4k context.
+# Data, tokenizer and shards are shared by all M3 configs (keep them identical).
+data:
+  name: m3-mix
+  version: 1
+  min_chars: 200
+  max_chars: 100000
+  quality_filters: true
+  near_dedup: true
+  decontaminate:
+  - hellaswag
+  - arc_easy
+  - arc_challenge
+  - piqa
+  - gsm8k
+  split:
+    train: 0.995
+    val: 0.004
+    test: 0.001
+  sources:
+  - name: fineweb-edu
+    type: hf
+    path: HuggingFaceFW/fineweb-edu
+    config_name: sample-10BT
+    streaming: true
+    max_bytes: 20000000000
+    min_score_field: int_score
+    min_score: 3
+    license: ODC-By-1.0
+    url: https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
+    note: Educational web pages filtered by an LLM-based classifier (Penedo et al., 2024).
+  - name: wikipedia
+    type: hf
+    path: wikimedia/wikipedia
+    config_name: 20231101.en
+    streaming: true
+    max_bytes: 4000000000
+    chunk_chars: 20000
+    license: CC-BY-SA-3.0 / GFDL
+    url: https://huggingface.co/datasets/wikimedia/wikipedia
+  - name: finemath
+    type: hf
+    path: HuggingFaceTB/finemath
+    config_name: finemath-4plus
+    streaming: true
+    max_bytes: 2000000000
+    license: ODC-By-1.0
+    url: https://huggingface.co/datasets/HuggingFaceTB/finemath
+  - name: gutenberg
+    type: hf
+    path: sedthh/gutenberg_english
+    text_field: TEXT
+    streaming: true
+    max_bytes: 2000000000
+    chunk_chars: 8000
+    license: public domain (Project Gutenberg, US)
+    url: https://huggingface.co/datasets/sedthh/gutenberg_english
+  - name: code-python
+    type: hf
+    path: bigcode/the-stack-smol
+    data_dir: data/python
+    text_field: content
+    streaming: true
+    prose: false
+    chunk_chars: 20000
+    license: permissive per file (MIT/Apache/BSD...; see the dataset's license column)
+    url: https://huggingface.co/datasets/bigcode/the-stack-smol
+    note: 'Gated: accept the terms on the dataset page with the HF account first.'
+tokenizer:
+  name: m3-bpe
+  version: 1
+  vocab_size: 32768
+  train_sample_bytes: 200000000
+  sample: spread
+  special_tokens:
+  - <think>
+  - </think>
+  - <speak>
+  - <revise>
+  - <search>
+  - <calc>
+  - <code>
+  - <docs>
+  - <result>
+  - </result>
+  - <ask_thinker>
+  - <action>
+  - <remember>
+  - <recall>
+  - <now>
+  - <user>
+  - <pluto>
+  - <sure>
+  - <unsure>
+  - <calm>
+  - <excited>
+  - <whisper>
+  - <slow>
+  - <fast>
+  - <voice:emma>
+  - <voice:pluto_young>
+  reserved_spare: 64
+shards:
+  name: m3-shards
+  version: 1
+  workers: 8
+model:
+  n_layer: 32
+  d_model: 1024
+  n_head: 16
+  n_kv_head: 4
+  context_length: 4096
+  pos: rope
+  norm: rmsnorm
+  mlp: swiglu
+  compile: true
+train:
+  seed: 1337
+  tokens_per_step: 524288
+  micro_batch_size: 4
+  max_steps: 15259
+  lr: 0.0003
+  warmup_steps: 1000
+  precision: auto
+  device: auto
+  log_every: 10
+  eval_every: 1000
+  eval_batches: 50
+  eval_split: val
+  ckpt_every: 500
+  max_wall_time_s: 84600
+  cost_per_hour: 0.0
+run:
+  name: m3-cloud

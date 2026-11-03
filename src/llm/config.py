@@ -67,6 +67,7 @@ class TokenizerConfig:
     train_sample_bytes: int = 100_000_000
     root: str = "tokenizers"
     special_tokens: tuple[str, ...] = ()  # named control tokens (M3: llm.tokenizer.bpe.PLUTO_SPECIALS)
+    sample: Literal["head", "spread"] = "head"  # spread: every k-th document across the whole split
     reserved_spare: int = 0  # extra unused tokens <spare_0>.. for future abilities
 
 

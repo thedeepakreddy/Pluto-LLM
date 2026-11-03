@@ -203,8 +203,14 @@ def train_tokenizer(cfg) -> Path:
     ddir = data_dir(cfg)
     sample: list[str] = []
     total = 0
-    with open(ddir / "train.jsonl", encoding="utf-8") as f:
-        for line in f:
+    path = ddir / "train.jsonl"
+    stride = 1
+    if cfg.tokenizer.sample == "spread":  # multi-source data is written source by source
+        stride = max(1, path.stat().st_size // max(cfg.tokenizer.train_sample_bytes, 1))
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i % stride:
+                continue
             text = json.loads(line)["text"]
             sample.append(text)
             total += len(text.encode("utf-8"))
@@ -221,6 +227,7 @@ def train_tokenizer(cfg) -> Path:
     write_manifest(out, kind="tokenizer", name=cfg.tokenizer.name, version=cfg.tokenizer.version,
                    files=["tokenizer.json"], inputs={"data": manifest_checksum(ddir)},
                    extra={"vocab_size": tok.vocab_size, "sample_bytes": total, "specials": specials,
+                          "sample": cfg.tokenizer.sample,
                           "bytes_per_token": len(probe.encode()) / max(1, len(tok.encode(probe)))},
                    info={"train_seconds": round(seconds, 2)})
     return out

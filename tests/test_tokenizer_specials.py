@@ -55,3 +55,21 @@ def test_pluto_specials_cover_spec():
                  "<voice:emma>", "<voice:pluto_young>", "<now>", "<sure>", "<unsure>"):
         assert name in PLUTO_SPECIALS
     assert len(set(PLUTO_SPECIALS)) == len(PLUTO_SPECIALS)
+
+
+def test_spread_sample_covers_whole_file(workspace, stories_path):
+    import yaml
+    from conftest import tiny_config_dict
+    from llm.config import load_config_dict
+    from llm.data.prepare import prepare_data
+    from llm.manifest import read_manifest
+    from llm.tokenizer.bpe import tokenizer_dir, train_tokenizer
+
+    d = tiny_config_dict(stories_path)
+    d["data"]["root"] = str(workspace / "data")
+    d["tokenizer"].update({"train_sample_bytes": 2000, "sample": "spread", "root": str(workspace / "tok")})
+    cfg = load_config_dict(d)
+    prepare_data(cfg)
+    train_tokenizer(cfg)
+    m = read_manifest(tokenizer_dir(cfg))["extra"]
+    assert 1500 <= m["sample_bytes"] <= 4000 and m["sample"] == "spread"

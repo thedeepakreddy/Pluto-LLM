@@ -248,6 +248,28 @@ placed), and about half of the outputs still never stop. Fixing the aligned layo
 training-side change (e.g. stronger supervision of token timing and of the stop decision, overlapping
 or shorter chunks), planned for M4 where streaming requires this layout.
 
+**Finding 3: speaking long text in independent 20-word parts fixes most of the aligned model's
+failure; carrying the previous part as context hurts.** Long passages are split at sentence/word
+boundaries into parts of ~20 words, each spoken separately and the audio concatenated, either with
+the previous part's text and audio as a prompt ("context") or without (first 50 chunks, one seed):
+
+| model | decoding | parts | WER | duration ratio | outputs at frame limit |
+|---|---|---|---:|---:|---:|
+| text-then-audio | default | whole passage (n=200) | 18.8% | 1.00 | 1% |
+| text-then-audio | default | 20 words, with context | 41.3% | 1.07 | 12% |
+| text-then-audio | default | 20 words, no context | **19.1%** | 1.20 | 2% |
+| aligned | text T=1 + pacing guard | whole passage | 91% | 2.05 | 52% |
+| aligned | text T=1 + pacing guard | 20 words, with context | 97% | 2.23 | 68% |
+| aligned | text T=1 + pacing guard | 20 words, no context | **40.2%** | 1.83 | 50% |
+
+Independent parts more than halve the aligned model's WER (91% → 40%) and leave the text-then-audio
+model unchanged (19.1% vs 18.8%, but on 50 instead of 200 chunks and with 20% longer audio from the
+joins). Context makes both worse: neither model was trained on prompts that already contain a
+previous part's speech, so the prompt is out of distribution. Short passages (1–20 words) are one
+part, so they are unchanged. Overlapping parts would also feed previous content as context; on this
+evidence they help only if the model is trained on such prompts, which is a training change for M4,
+not a decoding trick.
+
 **Conclusion so far (indicative: one run per layout, one seed).** For this ~30M model and this data,
 text-then-audio clearly beats the aligned "inner monologue" layout under the decoding we used. That
 is a statement about the full system (training + decoding), not a general verdict on aligned layouts,
@@ -312,8 +334,8 @@ Plan: finish M2 evaluation on Kaggle or Google Colab (free); keep Modal's free H
 
 ## 7. Next steps
 
-1. Test long-text generation with overlapping parts (generate 1–2 sentences at a time, the previous
-   part as context) on the same 200 passages.
+1. Done (Finding 3): independent parts help the aligned model; context hurts without training on it.
+   M4 trains on multi-part examples (previous part as prompt, optionally overlapping) and re-tests.
 2. Fix the aligned layout's training for M4–M5 (token-timing and stop supervision, overlapping chunks),
    where streaming needs this layout.
 3. M3: a ~100M text brain on FineWeb-Edu (Modal H100s), then M4 brain + voice at ~100M.

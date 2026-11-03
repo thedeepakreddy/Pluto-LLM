@@ -60,6 +60,9 @@ class SpeechSampling:
     top_k: int = 50
     seed: int = 1234
     text_temperature: float = 0.0  # text head; 0 = greedy
+    # Aligned speak only: if the text head picks PAD_TEXT (wait) for more than this many frames in
+    # a row while words remain, the next word is placed anyway. None = off (pure model choice).
+    max_pad_run: int | None = None
 
 
 # ---------------------------------------------------------------- helpers
@@ -199,7 +202,7 @@ def _generator(model: SpeechGPT, seed: int) -> torch.Generator:
 
 
 def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: SpeechSampling,
-          max_frames: int | None = None) -> np.ndarray:
+          max_frames: int | None = None, stats: dict | None = None) -> np.ndarray:
     """Text -> ``(N, K)`` codec codes (int64). The caller decodes them with the codec.
 
     Aligned layout: while tokens remain, the text slot of each frame position is a forced choice
@@ -234,15 +237,24 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
     gen = _generator(model, sampling.seed)
     tt = sampling.text_temperature
     K = model.K
+    nxt = [0]  # aligned: index of the next token to place
+    pad_run = [0]
+    forced = [0]
     with _EvalNoGrad(model):
         if audio.layout == "aligned":
-            nxt = [0]  # index of the next token to place
 
             def choose(h, j):
                 if nxt[0] < len(ids):
                     slot = _forced_choice(model, h, sp.pad_text, ids[nxt[0]], tt, gen)
+                    if (slot == sp.pad_text and sampling.max_pad_run is not None
+                            and pad_run[0] >= sampling.max_pad_run):
+                        slot = ids[nxt[0]]  # pacing guard: the head waited too long
+                        forced[0] += 1
                     if slot != sp.pad_text:
                         nxt[0] += 1
+                        pad_run[0] = 0
+                    else:
+                        pad_run[0] += 1
                     return slot
                 if delay == 0:
                     return _forced_choice(model, h, sp.pad_text, sp.end_audio, tt, gen)
@@ -264,8 +276,14 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
             prefix_text = [sp.bos, *ids, sp.audio]
             start = len(prefix_text)
         prefix_codes = np.full((len(prefix_text), K), EMPTY, dtype=np.int64)
-        return _generate(model, prefix_text, prefix_codes, start, max_frames, choose, can_stop,
-                         sp, delay, sampling, gen)
+        out = _generate(model, prefix_text, prefix_codes, start, max_frames, choose, can_stop,
+                        sp, delay, sampling, gen)
+    if stats is not None:  # diagnostics: did the text get placed, and did the model stop itself?
+        stats.update({"tokens_total": len(ids),
+                      "tokens_placed": nxt[0] if audio.layout == "aligned" else len(ids),
+                      "tokens_forced": forced[0], "max_frames": int(max_frames),
+                      "hit_frame_limit": bool(len(out) >= max_frames)})
+    return out
 
 
 def continue_speech(model: SpeechGPT, prompt_audio: np.ndarray, sample_rate: int, tok,

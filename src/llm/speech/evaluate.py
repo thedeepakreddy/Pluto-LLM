@@ -68,7 +68,12 @@ def summarize_items(items: list[dict]) -> dict:
         n_ref = [len(normalize_words(r)) for r in refs]
         errors = [it["wer"] * k if "wer" in it else word_error_rate(r, h) * k
                   for it, r, h, k in zip(group, refs, hyps, n_ref)]
+        hit = [it["hit_frame_limit"] for it in group if "hit_frame_limit" in it]
+        placed = [it["tokens_placed"] / it["tokens_total"] for it in group
+                  if it.get("tokens_total")]
         return {"n": len(group),
+                "hit_frame_limit_frac": float(np.mean(hit)) if hit else float("nan"),
+                "text_placed_frac_median": float(np.median(placed)) if placed else float("nan"),
                 "wer": sum(errors) / max(sum(n_ref), 1),  # word errors / reference words
                 "prefix_wer": float(np.mean([p for p, _ in ra])) if ra else float("nan"),
                 "correct_frac_median": float(np.median([c for _, c in ra])) if ra else float("nan"),
@@ -94,7 +99,8 @@ def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str
     gen_s, gen_frames, n_frames, ref_frames = 0.0, 0, 0, 0
     for i, (text, ref_codes) in enumerate(examples):
         t0 = time.perf_counter()
-        codes = speak(model, text, tok, audio, sampling)
+        gen_stats: dict = {}
+        codes = speak(model, text, tok, audio, sampling, stats=gen_stats)
         dt = time.perf_counter() - t0
         hyp = ""
         if len(codes):
@@ -102,7 +108,7 @@ def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str
         n, r = int(len(codes)), int(len(ref_codes))
         items.append({"i": i, "text": text, "hypothesis": hyp, "frames": n, "ref_frames": r,
                       "wer": word_error_rate(text, hyp), "cer": char_error_rate(text, hyp),
-                      "duration_ratio": n / r if r else None})
+                      "duration_ratio": n / r if r else None, **gen_stats})
         refs.append(text)
         hyps.append(hyp)
         gen_s, gen_frames, ref_frames = gen_s + dt, gen_frames + n, ref_frames + r
@@ -204,15 +210,17 @@ def _upload_eval(path, run_dir, hub_repo) -> None:
 
 
 def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None,
-                    temperature: float | None = None, top_k: int | None = None):
+                    temperature: float | None = None, top_k: int | None = None,
+                    max_pad_run: int | None = None):
     """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``.
 
     Each finished phase (ceiling, model, floor) is saved and, when the run has ``train.hub_repo``,
     uploaded to the Hub. Phases already saved for the same checkpoint and ``n`` are reused, so an
     interrupted evaluation continues instead of starting over. ``floor_n`` scores the (slow,
     never-stopping) untrained floor on only the first ``floor_n`` chunks. ``temperature``/``top_k``
-    override the voice-box sampling; non-default sampling writes ``speech_eval_t<T>_k<K>.json``
-    so it never replaces the default result."""
+    override the voice-box sampling; non-default sampling writes ``speech_eval_<tag>.json``. A run
+    whose ``n`` differs from an existing file's writes ``<name>_n<N>.json`` instead, so a quick
+    small run never replaces a full result."""
     import json
     from pathlib import Path
 
@@ -234,12 +242,21 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
     codec, asr = make_codec(cfg.speech), make_asr(cfg.speech)
     default = SpeechSampling()
     sampling = SpeechSampling(temperature=default.temperature if temperature is None else temperature,
-                              top_k=default.top_k if top_k is None else top_k)
+                              top_k=default.top_k if top_k is None else top_k,
+                              max_pad_run=max_pad_run)
     ckpt = find_latest_valid(run_dir)
-    is_default = (sampling.temperature, sampling.top_k) == (default.temperature, default.top_k)
-    name = "speech_eval.json" if is_default else f"speech_eval_t{sampling.temperature:g}_k{sampling.top_k}.json"
-    path = run_dir / name
+    is_default = ((sampling.temperature, sampling.top_k, sampling.max_pad_run)
+                  == (default.temperature, default.top_k, None))
+    tag = f"t{sampling.temperature:g}_k{sampling.top_k}" + (
+        f"_pad{sampling.max_pad_run}" if sampling.max_pad_run is not None else "")
+    path = run_dir / ("speech_eval.json" if is_default else f"speech_eval_{tag}.json")
+    if path.exists():  # a run of a different size never overwrites an existing result
+        prev_n = json.loads(path.read_text()).get("n_requested")
+        if prev_n is not None and prev_n != n:
+            path = path.with_name(f"{path.stem}_n{n}.json")
     samp = {"temperature": sampling.temperature, "top_k": sampling.top_k}
+    if sampling.max_pad_run is not None:
+        samp["max_pad_run"] = sampling.max_pad_run
     hub_repo = cfg.train.hub_repo
 
     def save():  # after every phase, so an interrupted eval keeps the finished phases

@@ -232,10 +232,12 @@ def _speech_diagnose(args) -> int:
         diag = summarize_items(d[phase]["per_item"])
         print(f"== {phase} ==")
         rows = [("all", diag["all"])] + list(diag["by_length_words"].items())
-        print(f"{'words':>8} {'n':>4} {'WER':>7} {'prefixWER':>9} {'read-ok':>8} {'dur':>6}")
+        print(f"{'words':>8} {'n':>4} {'WER':>7} {'prefixWER':>9} {'read-ok':>8} {'dur':>6} "
+              f"{'hitLimit':>8} {'placed':>7}")
         for k, v in rows:
             print(f"{k:>8} {v['n']:>4} {v['wer']:>7.3f} {v['prefix_wer']:>9.3f} "
-                  f"{v['correct_frac_median']:>8.2f} {v['duration_ratio_median']:>6.2f}")
+                  f"{v['correct_frac_median']:>8.2f} {v['duration_ratio_median']:>6.2f} "
+                  f"{v['hit_frame_limit_frac']:>8.2f} {v['text_placed_frac_median']:>7.2f}")
     return 0
 
 
@@ -249,6 +251,9 @@ def _eval_speech_args(p: argparse.ArgumentParser) -> None:
                    help="voice-box sampling temperature (default 0.8; 0 = greedy); non-default "
                         "values write speech_eval_t<T>_k<K>.json")
     p.add_argument("--top-k", type=int, default=None, help="voice-box top-k (default 50)")
+    p.add_argument("--max-pad-run", type=int, default=None,
+                   help="aligned only: place the next word if the text head waits more than N "
+                        "frames in a row (decoding experiment; default off)")
 
 
 @command("eval-speech", "Whisper-scored WER/CER, duration ratio and RTF for a speech run", _eval_speech_args)
@@ -256,7 +261,8 @@ def _eval_speech(args) -> int:
     from llm.speech.evaluate import run_eval_speech
 
     print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n,
-                          temperature=args.temperature, top_k=args.top_k))
+                          temperature=args.temperature, top_k=args.top_k,
+                          max_pad_run=args.max_pad_run))
     return 0
 
 

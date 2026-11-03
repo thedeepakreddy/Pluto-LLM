@@ -306,3 +306,16 @@ def test_real_time_factor():
     assert real_time_factor(2.0, 25, 12.5) == pytest.approx(1.0)
     assert real_time_factor(0.5, 25, 12.5) == pytest.approx(0.25)
     assert real_time_factor(1.0, 0, 12.5) == math.inf
+
+
+def test_pacing_guard_places_every_word(tok):
+    """With max_pad_run=0 the text head can never wait, so every token is placed; without the
+    guard the stats still report how many were placed and whether the frame limit was hit."""
+    m, audio = _model(tok)
+    stats = {}
+    speak(m, TEXT, tok, audio, SpeechSampling(max_pad_run=0, seed=1), stats=stats)
+    assert stats["tokens_placed"] == stats["tokens_total"] == len(tok.encode(TEXT))
+    plain = {}
+    speak(m, TEXT, tok, audio, SpeechSampling(seed=1), stats=plain)
+    assert plain["tokens_forced"] == 0 and 0 <= plain["tokens_placed"] <= plain["tokens_total"]
+    assert isinstance(plain["hit_frame_limit"], bool)

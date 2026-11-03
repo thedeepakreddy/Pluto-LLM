@@ -101,8 +101,9 @@ def test_cli_eval_speech(run):
     d = json.loads((run / "speech_eval.json").read_text())
     assert {"model", "ceiling", "floor"} <= set(d)
     assert d["model"]["n"] == 2 and d["floor"]["n"] == 2 and "wer" in d["ceiling"]
-    assert cli.main(["eval-speech", str(run), "--n", "1"]) == 0
-    assert "floor" not in json.loads((run / "speech_eval.json").read_text())
+    assert cli.main(["eval-speech", str(run), "--n", "1"]) == 0   # different size: own file
+    assert "floor" in json.loads((run / "speech_eval.json").read_text())
+    assert "floor" not in json.loads((run / "speech_eval_n1.json").read_text())
 
 
 def test_shards_text_accessor(run, tiny_config):
@@ -175,3 +176,15 @@ def test_eval_speech_temperature_writes_separate_file(run):
     assert d["sampling"] == {"temperature": 0.0, "top_k": 50}
     assert "diagnostics" in d["model"]
     assert cli.main(["speech-diagnose", str(other)]) == 0
+
+
+def test_eval_records_text_placement_and_pacing_guard(run):
+    """Per-item generation stats (words placed, frame limit) are recorded, and --max-pad-run
+    writes its own file with the pacing guard in the sampling settings."""
+    assert cli.main(["eval-speech", str(run), "--n", "2", "--max-pad-run", "3"]) == 0
+    d = json.loads((run / "speech_eval_t0.8_k50_pad3.json").read_text())
+    assert d["sampling"]["max_pad_run"] == 3
+    it = d["model"]["per_item"][0]
+    assert {"tokens_total", "tokens_placed", "tokens_forced", "hit_frame_limit"} <= set(it)
+    assert it["tokens_placed"] <= it["tokens_total"]
+    assert "hit_frame_limit_frac" in d["model"]["diagnostics"]["all"]

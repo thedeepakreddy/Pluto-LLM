@@ -115,3 +115,23 @@ Design: **fast talker + deep thinker** (do not make one model do everything).
 Consequences now: M3 leans to **Option A** (the fast talker), Option B is the future thinker; M3's data
 mix includes math/reasoning data. The final size decision is still taken after the H100 benchmark.
 Measured so far: M2 aligned (~30M) RTF 0.34 on a T4.
+
+## Multi-voice Pluto with voice IDs (agreed 2026-11-03, for M4)
+
+Pluto is trained on several voices, each with an ID, and speaks in the voice requested by command:
+
+    llm speak <run> --text "..." --voice emma
+    llm speak <run> --text "..." --voice pluto_young
+
+Design (to be detailed in the M4 spec):
+- **Data:** the M4 speech data is generated in several synthetic voices (e.g. Kokoro voices such as
+  `bf_emma`, plus a young cartoon-style "Pluto" voice, synthetic or pitch-shifted), each chunk tagged
+  with its voice ID; real human speech (LibriSpeech, Common Voice) gets per-dataset or per-speaker
+  IDs. Licenses checked per source.
+- **Model:** one learned token per voice at the start of every speech sequence (a modality-agnostic
+  extension of the vocabulary, per CLAUDE.md), so the same brain and voice box serve every voice.
+- **Switching:** instant at generation time (`--voice`); a new voice later = a short fine-tune with a
+  new ID, mixing in some old data to avoid forgetting. Old checkpoints are kept, so no voice is lost.
+- **Measured:** WER/CER per voice, plus a check that the requested voice is the one produced.
+- **Rules:** synthetic voices or licensed datasets only; never recordings of real children, and no
+  imitation of a real person's voice without consent. Disclosed as "synthetic character voices".

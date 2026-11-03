@@ -374,6 +374,29 @@ def _demo(args) -> int:
     return 0
 
 
+def _bench_args(p: argparse.ArgumentParser) -> None:
+    config_args(p)
+    p.add_argument("--steps", type=int, default=20, help="timed optimizer steps (after 3 warmup)")
+    p.add_argument("--tokens", type=float, default=None,
+                   help="token budget to estimate hours for (default: train.max_steps * tokens_per_step)")
+
+
+@command("bench", "measure training throughput, MFU and time for a token budget", _bench_args)
+def _bench(args) -> int:
+    from llm.train.bench import bench
+
+    cfg = _load(args)
+    r = bench(cfg, steps=args.steps)
+    tokens = args.tokens or cfg.train.max_steps * cfg.train.tokens_per_step
+    mfu = f"{r['mfu']:.1%}" if r["mfu"] is not None else "n/a"
+    mem = f"{r['peak_mem_gb']:.1f} GB" if r["peak_mem_gb"] is not None else "n/a"
+    print(f"| device | params | tokens/s | step | peak mem | MFU | hours for {tokens:.3g} tokens |")
+    print("|---|---:|---:|---:|---:|---:|---:|")
+    print(f"| {r['device']} ({r['precision']}) | {r['params'] / 1e6:.1f}M | {r['tokens_per_s']:,.0f} | "
+          f"{r['step_s']:.2f}s | {mem} | {mfu} | {r['hours_for'](tokens):.1f} |")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm", description="From-scratch LLM training system")
     sub = parser.add_subparsers(dest="command")

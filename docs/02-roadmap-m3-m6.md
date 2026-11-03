@@ -90,3 +90,28 @@ Two candidate designs (parameter counts calculated; the code prints exact counts
 **Decision rule (agreed 2026-11-03):** run the Option A pilot and the 10-minute H100 benchmark first,
 measure real tokens/s, then **ask the user** whether to continue with A or scale to B, using the
 measured time and cost. No size is fixed before that measurement.
+
+## Product goal: ultra-low latency, good quality, reasoning when needed (agreed 2026-11-03)
+
+Design: **fast talker + deep thinker** (do not make one model do everything).
+
+1. **Fast talker (always on):** the small Pluto (Option A size, ~135–160M) listens and answers
+   immediately using the aligned streaming layout, KV cache and later quantization. It handles most
+   conversation. Quality improves through better data, continued pre-training and distillation from
+   larger models; none of this changes its size, so latency stays the same.
+2. **Deep thinker (only when needed):** for hard questions (math, planning, multi-step reasoning) Pluto
+   decides it needs to think, says a natural filler right away ("let me think about that…"), the
+   thinker works in the background, and Pluto speaks the result. Candidates, in order: Pluto in a
+   step-by-step "think-first" mode; later a larger Pluto (~400M–1B, the Option B size); during
+   development an API model, always disclosed.
+
+| Goal | How | When |
+|---|---|---|
+| Ultra-low latency | small model, aligned streaming, KV cache, quantization | M3–M5 |
+| Output quality | quality data mix + distillation from larger models | M3 onward |
+| Reasoning when needed | math/code data, step-by-step reasoning examples, think-first mode, a router that decides when to think | M5+ |
+| Measured, not claimed | time to first spoken word (target ~300–500 ms), RTF, WER, quality and reasoning benchmarks | every milestone |
+
+Consequences now: M3 leans to **Option A** (the fast talker), Option B is the future thinker; M3's data
+mix includes math/reasoning data. The final size decision is still taken after the H100 benchmark.
+Measured so far: M2 aligned (~30M) RTF 0.34 on a T4.

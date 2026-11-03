@@ -135,3 +135,21 @@ def test_compare_includes_wer(run, tmp_path):
         (d / "speech_eval.json").write_text(json.dumps({"model": {"wer": w}, "ceiling": {"wer": 0.0}}))
     out = compare_runs(run.parent / "cmp-a", run.parent / "cmp-b", tmp_path / "out").read_text()
     assert "speech WER" in out and "0.500" in out and "0.250" in out
+
+
+def test_eval_speech_reuses_saved_phases_and_floor_n(run, monkeypatch):
+    """An interrupted evaluation continues: phases saved for the same checkpoint and --n are reused,
+    and --floor-n scores the slow untrained floor on fewer chunks."""
+    import llm.speech.evaluate as ev
+
+    assert cli.main(["eval-speech", str(run), "--n", "2"]) == 0
+    first = json.loads((run / "speech_eval.json").read_text())
+    calls = []
+    real = ev.evaluate_speech
+    monkeypatch.setattr(ev, "evaluate_speech", lambda *a, **k: calls.append(k.get("label")) or real(*a, **k))
+    monkeypatch.setattr(ev, "ceiling_wer", lambda *a, **k: pytest.fail("ceiling should be reused"))
+    assert cli.main(["eval-speech", str(run), "--n", "2", "--floor", "--floor-n", "1"]) == 0
+    d = json.loads((run / "speech_eval.json").read_text())
+    assert calls == ["floor"]                      # only the missing phase ran
+    assert d["model"] == first["model"] and d["ceiling"] == first["ceiling"]
+    assert d["floor"]["n"] == 1

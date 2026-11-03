@@ -146,8 +146,27 @@ def identity_recall(model, tok, probes, mode: Literal["text", "speech"], codec: 
             "per_fact": {f: sum(v) / len(v) for f, v in per.items()}, "items": items}
 
 
-def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
-    """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``."""
+def _upload_eval(path, run_dir, hub_repo) -> None:
+    """Best-effort copy of speech_eval.json to the run's folder in the Hub repo (where `llm pull-run`
+    restores it from), so a killed notebook session never loses finished phases."""
+    if not hub_repo:
+        return
+    try:
+        from huggingface_hub import HfApi
+
+        HfApi().upload_file(path_or_fileobj=str(path), path_in_repo=f"{run_dir.name}/{path.name}",
+                            repo_id=hub_repo)
+    except Exception as e:  # never fail an evaluation because of the network
+        print(f"warning: Hub upload of {path.name} failed: {e}", file=sys.stderr, flush=True)
+
+
+def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None):
+    """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``.
+
+    Each finished phase (ceiling, model, floor) is saved and, when the run has ``train.hub_repo``,
+    uploaded to the Hub. Phases already saved for the same checkpoint and ``n`` are reused, so an
+    interrupted evaluation continues instead of starting over. ``floor_n`` scores the (slow,
+    never-stopping) untrained floor on only the first ``floor_n`` chunks."""
     import json
     from pathlib import Path
 
@@ -170,20 +189,33 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False):
     sampling = SpeechSampling()
     ckpt = find_latest_valid(run_dir)
     path = run_dir / "speech_eval.json"
+    hub_repo = cfg.train.hub_repo
 
     def save():  # after every phase, so an interrupted eval keeps the finished phases
         atomic_write_json(path, json.loads(json.dumps(out)))
+        _upload_eval(path, run_dir, hub_repo)
 
     out = {"set": "held-out test, first chunks", "n_requested": n, "checkpoint": ckpt.name}
-    out["ceiling"] = ceiling_wer(codec, asr, examples, label="ceiling")
-    save()
-    out["model"] = evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling, label="model")
-    save()
-    if floor:
+    if path.exists():  # continue an interrupted evaluation of the same checkpoint and size
+        prev = json.loads(path.read_text())
+        if prev.get("checkpoint") == ckpt.name and prev.get("n_requested") == n:
+            for phase in ("ceiling", "model", "floor"):
+                if phase in prev:
+                    out[phase] = prev[phase]
+                    print(f"{phase}: reusing saved result", file=sys.stderr, flush=True)
+    if "ceiling" not in out:
+        out["ceiling"] = ceiling_wer(codec, asr, examples, label="ceiling")
+        save()
+    if "model" not in out:
+        out["model"] = evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling, label="model")
+        save()
+    if floor and "floor" not in out:
         torch.manual_seed(0)
         device = next(model.parameters()).device  # the floor must run where the model runs
         fresh = SpeechGPT(cfg.model, cfg.audio, tok.vocab_size + 4).to(device).eval()
-        out["floor"] = evaluate_speech(fresh, tok, codec, asr, examples, cfg.audio, sampling, label="floor")
+        floor_examples = examples[:floor_n] if floor_n else examples
+        out["floor"] = evaluate_speech(fresh, tok, codec, asr, floor_examples, cfg.audio, sampling,
+                                       label="floor")
         save()
     if cfg.identity is not None:
         from llm.identity.pcid import identity_dir, load_probes

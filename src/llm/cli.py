@@ -216,6 +216,8 @@ def _prepare_identity(args) -> int:
 def _eval_speech_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("run_dir")
     p.add_argument("--n", type=int, default=200, help="held-out test chunks to score (default 200)")
+    p.add_argument("--floor-n", type=int, default=None,
+                   help="score the untrained floor on only the first N chunks (it is slow)")
     p.add_argument("--floor", action="store_true", help="also score a freshly initialised model (seed 0)")
 
 
@@ -223,7 +225,7 @@ def _eval_speech_args(p: argparse.ArgumentParser) -> None:
 def _eval_speech(args) -> int:
     from llm.speech.evaluate import run_eval_speech
 
-    print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor))
+    print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n))
     return 0
 
 

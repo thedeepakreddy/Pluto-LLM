@@ -31,13 +31,20 @@ class SourceConfig:
     license: str = "unknown"
     url: str | None = None
     note: str | None = None
+    name: str = "main"
+    config_name: str | None = None  # Hugging Face dataset config (subset)
+    streaming: bool = False
+    max_bytes: int | None = None  # stop this source after this many UTF-8 bytes received
+    min_score_field: str | None = None  # quality filter, e.g. FineWeb-Edu "int_score"
+    min_score: float | None = None
 
 
 @dataclass(frozen=True)
 class DataConfig:
     name: str
     version: int
-    source: SourceConfig
+    source: SourceConfig | None = None
+    sources: tuple[SourceConfig, ...] | None = None  # M3: several sources, taken in order
     min_chars: int = 20
     max_chars: int = 20000
     split: dict[str, float] = field(
@@ -275,9 +282,26 @@ def _validate_model(m: ModelConfig) -> None:
         raise ConfigError("RoPE needs an even head dimension (d_model / n_head)")
 
 
+def _validate_sources(d: DataConfig) -> None:
+    if (d.source is None) == (d.sources is None):
+        raise ConfigError("set exactly one of data.source and data.sources")
+    if d.sources is not None:
+        if not d.sources:
+            raise ConfigError("data.sources must not be empty")
+        names = [s.name for s in d.sources]
+        if len(set(names)) != len(names):
+            raise ConfigError(f"data.sources names must be unique, got {names}")
+        for s in d.sources:
+            if s.license == "unknown":
+                raise ConfigError(f"data.sources[{s.name}]: license is required")
+            if (s.min_score_field is None) != (s.min_score is None):
+                raise ConfigError(f"data.sources[{s.name}]: set both min_score_field and min_score")
+
+
 def _validate(cfg: Config) -> None:
     m, t = cfg.model, cfg.train
     _validate_model(m)
+    _validate_sources(cfg.data)
     if set(cfg.data.split) != {"train", "val", "test"}:
         raise ConfigError("data.split must have exactly the keys train, val, test")
     if any(v < 0 for v in cfg.data.split.values()) or abs(sum(cfg.data.split.values()) - 1.0) > 1e-6:

@@ -14,7 +14,7 @@ from typing import Literal
 import numpy as np
 
 from llm.config import AudioConfig
-from llm.speech.generate import SpeechSampling, real_time_factor, speak
+from llm.speech.generate import SpeechSampling, real_time_factor, speak, speak_long
 from llm.speech.interfaces import ASR, Codec
 from llm.speech.wer import char_error_rate, normalize_words, word_error_rate
 
@@ -94,13 +94,19 @@ def _progress(label: str, i: int, n: int) -> None:
 
 
 def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]],
-                    audio: AudioConfig, sampling: SpeechSampling, label: str = "") -> dict:
+                    audio: AudioConfig, sampling: SpeechSampling, label: str = "",
+                    long_parts: int | None = None, long_context: bool = True) -> dict:
     items, refs, hyps = [], [], []
     gen_s, gen_frames, n_frames, ref_frames = 0.0, 0, 0, 0
     for i, (text, ref_codes) in enumerate(examples):
         t0 = time.perf_counter()
         gen_stats: dict = {}
-        codes = speak(model, text, tok, audio, sampling, stats=gen_stats)
+        if long_parts:
+            codes = speak_long(model, text, tok, audio, sampling, part_words=long_parts,
+                               use_context=long_context, stats=gen_stats)
+        else:
+            codes = speak(model, text, tok, audio, sampling, stats=gen_stats)
+        gen_stats.pop("token_frames", None)
         dt = time.perf_counter() - t0
         hyp = ""
         if len(codes):
@@ -211,7 +217,8 @@ def _upload_eval(path, run_dir, hub_repo) -> None:
 
 def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None,
                     temperature: float | None = None, top_k: int | None = None,
-                    max_pad_run: int | None = None, text_temperature: float | None = None):
+                    max_pad_run: int | None = None, text_temperature: float | None = None,
+                    long_parts: int | None = None, long_context: bool = True):
     """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``.
 
     Each finished phase (ceiling, model, floor) is saved and, when the run has ``train.hub_repo``,
@@ -251,7 +258,9 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
                   == (default.temperature, default.top_k, None, default.text_temperature))
     tag = f"t{sampling.temperature:g}_k{sampling.top_k}" + (
         f"_pad{sampling.max_pad_run}" if sampling.max_pad_run is not None else "") + (
-        f"_tt{sampling.text_temperature:g}" if sampling.text_temperature != default.text_temperature else "")
+        f"_tt{sampling.text_temperature:g}" if sampling.text_temperature != default.text_temperature else "") + (
+        f"_long{long_parts}" + ("" if long_context else "nc") if long_parts else "")
+    is_default = is_default and not long_parts
     path = run_dir / ("speech_eval.json" if is_default else f"speech_eval_{tag}.json")
     if path.exists():  # a run of a different size never overwrites an existing result
         prev_n = json.loads(path.read_text()).get("n_requested")
@@ -262,6 +271,9 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
         samp["max_pad_run"] = sampling.max_pad_run
     if sampling.text_temperature != default.text_temperature:
         samp["text_temperature"] = sampling.text_temperature
+    if long_parts:
+        samp["long_parts"] = long_parts
+        samp["long_context"] = long_context
     hub_repo = cfg.train.hub_repo
 
     def save():  # after every phase, so an interrupted eval keeps the finished phases
@@ -284,7 +296,8 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
         out["ceiling"] = ceiling_wer(codec, asr, examples, label="ceiling")
         save()
     if "model" not in out:
-        out["model"] = evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling, label="model")
+        out["model"] = evaluate_speech(model, tok, codec, asr, examples, cfg.audio, sampling, label="model",
+                                       long_parts=long_parts, long_context=long_context)
         save()
     if floor and "floor" not in out:
         torch.manual_seed(0)

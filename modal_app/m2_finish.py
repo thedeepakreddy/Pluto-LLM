@@ -15,7 +15,7 @@ Run (``--detach`` keeps it running if you close the terminal):
     PLUTO_GPU=T4 modal run --detach modal_app/m2_finish.py                # a different GPU
     modal run modal_app/m2_finish.py --steps summary                      # print all results (CPU)
 
-Steps: setup, diagnostics, baseline, floor, demo, report, texttemp (default: all, in that order).
+Steps: setup, diagnostics, baseline, floor, demo, report, texttemp, longtext (default: all).
 PLUTO_BASELINE_N (default 50) sets how many test chunks the baseline is scored on.
 Logs: printed here and in the Modal dashboard. Cost: shown in the Modal dashboard (an L4 or T4
 for ~3 h is a few dollars of credit).
@@ -38,7 +38,7 @@ ALIGNED = "configs/m2-speech-aligned.yaml"
 # Order: the most informative and cheapest results first. The baseline's babbling outputs are slow
 # to transcribe (~2.5 min per chunk on an L4), so it is scored on the first 50 test chunks: the
 # same chunks as the first 50 of the aligned 200-chunk result, so the comparison stays matched.
-ALL_STEPS = ("setup", "diagnostics", "baseline", "floor", "demo", "report", "texttemp")
+ALL_STEPS = ("setup", "diagnostics", "baseline", "floor", "demo", "report", "texttemp", "longtext")
 BASELINE_N = int(os.environ.get("PLUTO_BASELINE_N", "50"))
 SPACY_WHEEL = ("en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/"
                "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl")
@@ -124,6 +124,18 @@ def finish(steps: list[str]) -> None:
                 print(f"\n===== text-temperature diagnostic: {flags}", flush=True)
                 _sh(f"llm eval-speech {ALIGNED_RUN} --n 50 {flags}")
                 _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval_{tag}.json")
+                volume.commit()
+        if "longtext" in steps:  # user's idea: speak long text in parts, previous part as context
+            for run, flags, tag in (
+                    (BASELINE_RUN, "--long-parts 20", "t0.8_k50_long20"),
+                    (BASELINE_RUN, "--long-parts 20 --long-no-context", "t0.8_k50_long20nc"),
+                    (ALIGNED_RUN, "--max-pad-run 12 --text-temperature 1 --long-parts 20",
+                     "t0.8_k50_pad12_tt1_long20"),
+                    (ALIGNED_RUN, "--max-pad-run 12 --text-temperature 1 --long-parts 20 --long-no-context",
+                     "t0.8_k50_pad12_tt1_long20nc")):
+                print(f"\n===== long-text: {run.split('/')[-1]} {flags}", flush=True)
+                _sh(f"llm eval-speech {run} --n 50 {flags}")
+                _sh(f"llm speech-diagnose {run}/speech_eval_{tag}.json")
                 volume.commit()
         if "baseline" in steps:
             _sh(f"llm eval-speech {BASELINE_RUN} --n {BASELINE_N}")

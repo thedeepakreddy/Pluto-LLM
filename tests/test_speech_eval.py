@@ -194,3 +194,11 @@ def test_eval_speech_text_temperature_tag(run):
     assert cli.main(["eval-speech", str(run), "--n", "1", "--text-temperature", "1"]) == 0
     d = json.loads((run / "speech_eval_t0.8_k50_tt1.json").read_text())
     assert d["sampling"]["text_temperature"] == 1.0
+
+
+def test_eval_speech_long_mode_tags(run):
+    assert cli.main(["eval-speech", str(run), "--n", "1", "--long-parts", "10"]) == 0
+    d = json.loads((run / "speech_eval_t0.8_k50_long10.json").read_text())
+    assert d["sampling"]["long_parts"] == 10 and d["sampling"]["long_context"] is True
+    assert cli.main(["eval-speech", str(run), "--n", "1", "--long-parts", "10", "--long-no-context"]) == 0
+    assert (run / "speech_eval_t0.8_k50_long10nc.json").exists()

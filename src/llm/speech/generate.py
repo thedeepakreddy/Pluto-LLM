@@ -49,7 +49,8 @@ from llm.config import AudioConfig
 from llm.model.voice import SpeechGPT
 from llm.speech.chunk import token_start_frames
 from llm.speech.interfaces import ASR, Codec
-from llm.speech.layout import EMPTY, Example, SpecialIds, build_aligned, extract_codes, special_ids
+from llm.speech.layout import (EMPTY, Example, SpecialIds, build_aligned, build_text_then_audio,
+                               extract_codes, special_ids)
 
 log = logging.getLogger(__name__)
 
@@ -202,7 +203,8 @@ def _generator(model: SpeechGPT, seed: int) -> torch.Generator:
 
 
 def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: SpeechSampling,
-          max_frames: int | None = None, stats: dict | None = None) -> np.ndarray:
+          max_frames: int | None = None, stats: dict | None = None,
+          context: dict | None = None) -> np.ndarray:
     """Text -> ``(N, K)`` codec codes (int64). The caller decodes them with the codec.
 
     Aligned layout: while tokens remain, the text slot of each frame position is a forced choice
@@ -213,6 +215,12 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
     positions, the text head's PAD/END_AUDIO choice ends instead.) Stops after ``max_frames``
     frames at the latest (default ``min(context - tokens - delay - 3, ceil(2 * words / 2.5 *
     12.5))``, i.e. twice a 2.5 words/s speaking rate at 12.5 frames/s).
+
+    ``context`` (used by ``speak_long``): the previous part as ``{"ids", "codes",
+    "token_frames"}``, laid out with the training layout and fed as a prefix (its delayed
+    codebooks forced onto the first new positions), so this part continues it in the same voice.
+    Only the new frames are returned; ``stats["token_frames"]`` records where this part's tokens
+    were placed so it can serve as the next part's context.
     """
     if not text or not text.strip():
         raise ValueError("text is empty")
@@ -240,6 +248,9 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
     nxt = [0]  # aligned: index of the next token to place
     pad_run = [0]
     forced = [0]
+    token_frames: list[int] = []  # aligned: placement (relative frame position) of each token
+    forced_rest = None
+    n_prev = 0
     with _EvalNoGrad(model):
         if audio.layout == "aligned":
 
@@ -253,6 +264,7 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
                     if slot != sp.pad_text:
                         nxt[0] += 1
                         pad_run[0] = 0
+                        token_frames.append(j + 1)
                     else:
                         pad_run[0] += 1
                     return slot
@@ -264,6 +276,15 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
                 return nxt[0] >= len(ids)
 
             prefix_text, start = [sp.bos], 1
+            prefix_codes = np.full((1, K), EMPTY, dtype=np.int64)
+            if context is not None:
+                prev_codes = np.asarray(context["codes"], dtype=np.int64)
+                n_prev = prev_codes.shape[0]
+                placed = list(context["ids"])[: len(context["token_frames"])]
+                ex = build_aligned(placed, list(context["token_frames"]), prev_codes, sp, delay)
+                cut = n_prev + 1  # BOS + the previous part's frame positions
+                prefix_text, prefix_codes = ex.text[:cut].tolist(), ex.codes[:cut]
+                forced_rest = ex.codes[cut: cut + delay, 1:]
         else:
             def choose(h, j):
                 if delay == 0:
@@ -275,15 +296,88 @@ def speak(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: Speech
 
             prefix_text = [sp.bos, *ids, sp.audio]
             start = len(prefix_text)
-        prefix_codes = np.full((len(prefix_text), K), EMPTY, dtype=np.int64)
+            prefix_codes = np.full((len(prefix_text), K), EMPTY, dtype=np.int64)
+            if context is not None:  # [BOS] + previous + current text + [AUDIO] + previous frames
+                prev_codes = np.asarray(context["codes"], dtype=np.int64)
+                n_prev = prev_codes.shape[0]
+                ex = build_text_then_audio([*context["ids"], *ids], prev_codes, sp, delay)
+                start = 1 + len(context["ids"]) + len(ids) + 1
+                cut = start + n_prev
+                prefix_text, prefix_codes = ex.text[:cut].tolist(), ex.codes[:cut]
+                forced_rest = ex.codes[cut: cut + delay, 1:]
+        room = ctx - len(prefix_text) - delay - 2
+        if context is not None:
+            if room <= 0:
+                raise ValueError("context too long for the model's context_length")
+            max_frames = min(max_frames, room)
         out = _generate(model, prefix_text, prefix_codes, start, max_frames, choose, can_stop,
-                        sp, delay, sampling, gen)
+                        sp, delay, sampling, gen, forced_rest=forced_rest)
+        out = out[n_prev:]  # only this part's frames
     if stats is not None:  # diagnostics: did the text get placed, and did the model stop itself?
         stats.update({"tokens_total": len(ids),
                       "tokens_placed": nxt[0] if audio.layout == "aligned" else len(ids),
                       "tokens_forced": forced[0], "max_frames": int(max_frames),
-                      "hit_frame_limit": bool(len(out) >= max_frames)})
+                      "hit_frame_limit": bool(len(out) >= max_frames),
+                      "token_frames": token_frames if audio.layout == "aligned" else []})
     return out
+
+
+_SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"']?\s+")
+
+
+def split_parts(text: str, part_words: int = 20) -> list[str]:
+    """Split text into parts of whole sentences, each at most ~``part_words`` words (a longer
+    sentence stays one part)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    for sent in (x.strip() for x in _SENTENCE.split(text.strip())):
+        if not sent:
+            continue
+        if cur and len(" ".join(cur + [sent]).split()) > part_words:
+            parts.append(" ".join(cur))
+            cur = []
+        cur.append(sent)
+    if cur:
+        parts.append(" ".join(cur))
+    return parts
+
+
+def speak_long(model: SpeechGPT, text: str, tok, audio: AudioConfig, sampling: SpeechSampling,
+               part_words: int = 20, use_context: bool = True,
+               stats: dict | None = None) -> np.ndarray:
+    """Long text -> codes, generated part by part (``split_parts``), each part continuing the
+    previous one as context (``speak(context=...)``) unless ``use_context`` is False (then parts
+    are generated independently and concatenated: the control condition). Falls back to no
+    context for a part whose context would not fit."""
+    import dataclasses
+
+    parts = split_parts(text, part_words)
+    out: list[np.ndarray] = []
+    prev: dict | None = None
+    agg = {"parts": len(parts), "tokens_total": 0, "tokens_placed": 0, "tokens_forced": 0,
+           "parts_hit_limit": 0, "parts_without_context": 0}
+    for i, part in enumerate(parts):
+        st: dict = {}
+        samp = dataclasses.replace(sampling, seed=sampling.seed + i)
+        try:
+            codes = speak(model, part, tok, audio, samp, stats=st,
+                          context=prev if use_context else None)
+        except ValueError:
+            if prev is None or not use_context:
+                raise
+            agg["parts_without_context"] += 1
+            st = {}
+            codes = speak(model, part, tok, audio, samp, stats=st)
+        out.append(codes)
+        agg["tokens_total"] += st["tokens_total"]
+        agg["tokens_placed"] += st["tokens_placed"]
+        agg["tokens_forced"] += st["tokens_forced"]
+        agg["parts_hit_limit"] += int(st["hit_frame_limit"])
+        prev = {"ids": tok.encode(part), "codes": codes, "token_frames": st["token_frames"]}
+    if stats is not None:
+        agg["hit_frame_limit"] = agg["parts_hit_limit"] > 0
+        stats.update(agg)
+    return np.concatenate(out) if out else np.zeros((0, model.K), dtype=np.int64)
 
 
 def continue_speech(model: SpeechGPT, prompt_audio: np.ndarray, sample_rate: int, tok,

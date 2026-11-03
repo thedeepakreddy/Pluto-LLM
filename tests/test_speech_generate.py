@@ -319,3 +319,38 @@ def test_pacing_guard_places_every_word(tok):
     speak(m, TEXT, tok, audio, SpeechSampling(seed=1), stats=plain)
     assert plain["tokens_forced"] == 0 and 0 <= plain["tokens_placed"] <= plain["tokens_total"]
     assert isinstance(plain["hit_frame_limit"], bool)
+
+
+LONG = "Tom found a little boat. He put it in the pond. The boat went far away. Tom was sad but then it came back."
+
+
+@pytest.mark.parametrize("layout", ["aligned", "text_then_audio"])
+@pytest.mark.parametrize("use_context", [True, False])
+def test_speak_long_parts(tok, layout, use_context):
+    """Part-by-part generation returns only new frames per part, places every token with the
+    pacing guard off/on as usual, and reports per-part stats; context is fed when enabled."""
+    from llm.speech.generate import speak_long, split_parts
+
+    m, audio = _model(tok, layout=layout, ctx=256)
+    parts = split_parts(LONG, part_words=8)
+    assert len(parts) >= 3
+    st = {}
+    codes = speak_long(m, LONG, tok, audio, SpeechSampling(seed=1, max_pad_run=0),
+                       part_words=8, use_context=use_context, stats=st)
+    assert codes.ndim == 2 and codes.shape[1] == m.K and len(codes) > 0
+    assert st["parts"] == len(parts)
+    assert st["tokens_total"] == sum(len(tok.encode(p)) for p in parts)
+    if layout == "aligned":
+        assert st["tokens_placed"] == st["tokens_total"]  # guard 0: never waits
+
+
+def test_speak_with_context_returns_only_new_frames(tok):
+    m, audio = _model(tok, layout="aligned", ctx=256)
+    st = {}
+    first = speak(m, "Tom found a boat.", tok, audio, SpeechSampling(seed=1, max_pad_run=0), stats=st)
+    ctx = {"ids": tok.encode("Tom found a boat."), "codes": first, "token_frames": st["token_frames"]}
+    st2 = {}
+    nxt = speak(m, "He was happy.", tok, audio, SpeechSampling(seed=2, max_pad_run=0), stats=st2,
+                context=ctx)
+    assert nxt.shape[1] == m.K and len(nxt) <= st2["max_frames"]
+    assert st2["tokens_placed"] == len(tok.encode("He was happy."))

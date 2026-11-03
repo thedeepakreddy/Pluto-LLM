@@ -257,6 +257,11 @@ def _eval_speech_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--text-temperature", type=float, default=None,
                    help="aligned: sample the text head's next-word-or-wait choice at this "
                         "temperature instead of greedily (default 0 = greedy)")
+    p.add_argument("--long-parts", type=int, default=None, metavar="WORDS",
+                   help="long-text mode: speak whole sentences in parts of at most ~WORDS words, "
+                        "each continuing the previous part as context")
+    p.add_argument("--long-no-context", action="store_true",
+                   help="with --long-parts: generate parts independently (control condition)")
 
 
 @command("eval-speech", "Whisper-scored WER/CER, duration ratio and RTF for a speech run", _eval_speech_args)
@@ -265,7 +270,8 @@ def _eval_speech(args) -> int:
 
     print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n,
                           temperature=args.temperature, top_k=args.top_k,
-                          max_pad_run=args.max_pad_run, text_temperature=args.text_temperature))
+                          max_pad_run=args.max_pad_run, text_temperature=args.text_temperature,
+                          long_parts=args.long_parts, long_context=not args.long_no_context))
     return 0
 
 

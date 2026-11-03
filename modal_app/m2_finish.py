@@ -13,6 +13,7 @@ Run (``--detach`` keeps it running if you close the terminal):
     modal run --detach modal_app/m2_finish.py
     modal run --detach modal_app/m2_finish.py --steps baseline,floor     # only some steps
     PLUTO_GPU=T4 modal run --detach modal_app/m2_finish.py                # a different GPU
+    modal run modal_app/m2_finish.py --steps summary                      # print all results (CPU)
 
 Steps: setup, diagnostics, baseline, floor, demo, report (default: all, in that order).
 PLUTO_BASELINE_N (default 50) sets how many test chunks the baseline is scored on.
@@ -163,8 +164,38 @@ def finish(steps: list[str]) -> None:
         volume.commit()
 
 
+@app.function(timeout=1800, volumes={"/vol": volume})
+def summary() -> None:
+    """CPU only: print every saved result (headline numbers + speech-diagnose tables)."""
+    import glob
+    import json
+
+    _sh("pip install -q --no-deps -e .")
+    for run in (ALIGNED_RUN, BASELINE_RUN):
+        for path in sorted(glob.glob(f"{WORK}/{run}/speech_eval*.json")):
+            d = json.load(open(path))
+            print(f"\n##### {run.split('/')[-1]} :: {os.path.basename(path)}  "
+                  f"n={d.get('n_requested')} sampling={d.get('sampling', 'default')}", flush=True)
+            for phase in ("ceiling", "model", "floor"):
+                if phase in d:
+                    v = d[phase]
+                    print(f"  {phase:8s} WER {v.get('wer', float('nan')):.3f}  CER "
+                          f"{v.get('cer', float('nan')):.3f}  dur {v.get('duration_ratio', '-')}  "
+                          f"rtf {v.get('rtf', '-')}  n {v.get('n')}", flush=True)
+            if "identity" in d:  # recall rates only (no private text)
+                ident = d["identity"]
+                print("  identity recall:", {k: ident[k].get("recall") for k in ident
+                                              if isinstance(ident[k], dict)}, flush=True)
+            _sh(f"llm speech-diagnose {path}", check=False)
+    for path in glob.glob(f"{WORK}/runs/compare-*/comparison.md"):
+        print(f"\n##### {os.path.basename(os.path.dirname(path))}\n" + open(path).read(), flush=True)
+
+
 @app.local_entrypoint()
 def main(steps: str = ",".join(ALL_STEPS)):
+    if steps.strip() == "summary":
+        summary.remote()
+        return
     chosen = [s.strip() for s in steps.split(",") if s.strip()]
     unknown = set(chosen) - set(ALL_STEPS)
     if unknown:

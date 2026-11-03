@@ -28,7 +28,7 @@ def _arc(name: str) -> Callable[[], Iterator[str]]:
 
 
 def _piqa() -> Iterator[str]:
-    for r in _hf("ybisk/piqa", None, "validation"):
+    for r in _hf("baber/piqa", None, "validation"):  # parquet copy (the original uses a loading script)
         yield r["goal"]
         yield r["goal"] + " " + r["sol1"]
         yield r["goal"] + " " + r["sol2"]

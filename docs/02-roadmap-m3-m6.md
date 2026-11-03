@@ -73,3 +73,20 @@ existing CLI (`--set` overrides or sampling flags; never edits code or a running
 Guardrails: free tests first; paid/limited GPU only with human approval; one change per experiment;
 results only from runs that actually happened. Disclosure: "a research agent powered by <model> that
 experiments on Pluto", never "Pluto researches itself".
+
+## Model size: decide during M3 (open decision)
+
+Two candidate designs (parameter counts calculated; the code prints exact counts):
+
+| | Option A | Option B |
+|---|---|---|
+| Brain | 12 layers × 768, 32k vocab | 24 layers × 1024, 32k vocab |
+| M3 total | ~134M (85M non-embedding) | ~368M (302M non-embedding) |
+| M4 / M5 total (+ voice box) | ~160M | ~400M |
+| M3 tokens | ~5B (~37 tokens/param) | ~7–10B |
+| M3 H100 time (estimate) | ~1.5–4 h | ~6–14 h |
+| Compute | free Modal hours | needs cloud credits (GCP / Azure) |
+
+**Decision rule (agreed 2026-11-03):** run the Option A pilot and the 10-minute H100 benchmark first,
+measure real tokens/s, then **ask the user** whether to continue with A or scale to B, using the
+measured time and cost. No size is fixed before that measurement.

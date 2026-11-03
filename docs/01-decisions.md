@@ -82,3 +82,11 @@ until its milestone.
   Gradient did not work. M2's remaining evaluation runs on **Modal with an ordinary GPU** (L4 default,
   `modal_app/m2_finish.py`, a few dollars of credit), which also tests the Modal pipeline cheaply;
   **H100s are reserved for M3 and beyond**.
+
+## 2026-11-04 — M3 data mix without code (for now)
+
+`bigcode/the-stack-smol` stayed gated for our token after accepting its terms, so the first M3 mix
+(`m3-mix` v1) has no code: FineWeb-Edu sample-10BT (int_score ≥ 3), Wikipedia 20231101.en, FineMath 4+
+and Project Gutenberg, with quality filters, near-dedup and 13-gram decontamination against HellaSwag,
+ARC, PIQA and GSM8K. Code (permissively licensed) is added later as a new data version; until then
+Pluto's programming ability is expected to be weak and will not be claimed.

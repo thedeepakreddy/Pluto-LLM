@@ -55,17 +55,6 @@ data:
     chunk_chars: 8000
     license: public domain (Project Gutenberg, US)
     url: https://huggingface.co/datasets/sedthh/gutenberg_english
-  - name: code-python
-    type: hf
-    path: bigcode/the-stack-smol
-    data_dir: data/python
-    text_field: content
-    streaming: true
-    prose: false
-    chunk_chars: 20000
-    license: permissive per file (MIT/Apache/BSD...; see the dataset's license column)
-    url: https://huggingface.co/datasets/bigcode/the-stack-smol
-    note: 'Gated: accept the terms on the dataset page with the HF account first.'
 tokenizer:
   name: m3-bpe
   version: 1

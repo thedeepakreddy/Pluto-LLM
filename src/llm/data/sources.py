@@ -19,7 +19,8 @@ def _local_rows(src: SourceConfig) -> Iterator[dict]:
 def _hf_rows(src: SourceConfig, streaming: bool = True) -> Iterator[dict]:
     from datasets import load_dataset  # heavy import, only when needed
 
-    yield from load_dataset(src.path, src.config_name, split=src.split, streaming=streaming)
+    yield from load_dataset(src.path, src.config_name, split=src.split, streaming=streaming,
+                            data_dir=src.data_dir)
 
 
 def _rows(src: SourceConfig, streaming: bool = True) -> Iterator[dict]:
@@ -54,8 +55,35 @@ def iter_source(src: SourceConfig, stats: SourceStats) -> Iterator[str]:
         stats.bytes += len(text.encode("utf-8", errors="surrogatepass"))
         if src.min_score_field is not None:
             score = row.get(src.min_score_field)
+            if score is not None and (isinstance(score, bool) or not isinstance(score, (int, float))):
+                raise ValueError(f"source '{src.name}': {src.min_score_field}={score!r} is not numeric")
             if score is None or score < src.min_score:
                 stats.below_min_score += 1
                 continue
         stats.passed += 1
-        yield text
+        if src.chunk_chars is None or len(text) <= src.chunk_chars:
+            yield text
+        else:
+            yield from split_chars(text, src.chunk_chars)
+
+
+def split_chars(text: str, limit: int) -> list[str]:
+    """Split at paragraph breaks into pieces of at most ~limit characters (a longer paragraph is
+    cut at the last space before the limit)."""
+    parts, cur = [], ""
+    for para in text.split("\n\n"):
+        while len(para) > limit:
+            cut = para.rfind(" ", 0, limit)
+            cut = cut if cut > 0 else limit
+            if cur:
+                parts.append(cur)
+                cur = ""
+            parts.append(para[:cut])
+            para = para[cut:].lstrip()
+        if cur and len(cur) + 2 + len(para) > limit:
+            parts.append(cur)
+            cur = ""
+        cur = f"{cur}\n\n{para}" if cur else para
+    if cur:
+        parts.append(cur)
+    return parts

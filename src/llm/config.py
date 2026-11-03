@@ -37,6 +37,9 @@ class SourceConfig:
     max_bytes: int | None = None  # stop this source after this many UTF-8 bytes received
     min_score_field: str | None = None  # quality filter, e.g. FineWeb-Edu "int_score"
     min_score: float | None = None
+    data_dir: str | None = None  # Hugging Face data_dir (e.g. "data/python" in The Stack)
+    prose: bool = True  # False: skip prose heuristics (code)
+    chunk_chars: int | None = None  # split longer docs at paragraph breaks (books, long articles)
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,9 @@ class DataConfig:
     version: int
     source: SourceConfig | None = None
     sources: tuple[SourceConfig, ...] | None = None  # M3: several sources, taken in order
+    quality_filters: bool = False  # M3: Gopher-style prose heuristics (sources path only)
+    decontaminate: tuple[str, ...] = ()  # benchmark names (llm.data.benchmarks) to remove 13-gram overlap with
+    near_dedup: bool = False  # M3: MinHash near-duplicate removal, global across sources
     min_chars: int = 20
     max_chars: int = 20000
     split: dict[str, float] = field(

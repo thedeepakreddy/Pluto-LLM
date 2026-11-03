@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 
 from llm.config import Config
-from llm.data.clean import REASONS, CleanStats, iter_clean
+from llm.data.benchmarks import benchmark_texts
+from llm.data.clean import REASONS, CleanStats, iter_clean, normalize_text
+from llm.data.quality import QUALITY_REASONS, Decontaminator, NearDedup, fingerprint, heuristic_reason
 from llm.data.sources import SourceStats, iter_source, iter_source_docs
 from llm.data.split import SPLITS, assign_split
 from llm.manifest import atomic_write_bytes, write_manifest
@@ -41,16 +43,13 @@ def prepare_data(cfg: Config) -> Path:
             for text in iter_clean(iter_source_docs(d.source), d.min_chars, d.max_chars, stats):
                 write(text)
         else:
-            def all_docs():  # one generator so dedup in iter_clean is global across sources
-                for src in d.sources:
-                    per.append(SourceStats(src.name))
-                    yield from iter_source(src, per[-1])
-                    if per[-1].received == 0:
-                        raise ValueError(f"data source '{src.name}' ({src.path}) is empty")
-
-            for text in iter_clean(all_docs(), d.min_chars, d.max_chars, stats):
+            for text in _iter_m3(d, stats, per):
                 per[-1].kept += 1
                 write(text)
+            for src, st in zip(d.sources, per):
+                if st.kept == 0:
+                    raise ValueError(f"data source '{src.name}' ({src.path}) kept no documents "
+                                     f"(received {st.received}, below min score {st.below_min_score})")
     finally:
         for f in files.values():
             f.close()
@@ -75,10 +74,49 @@ def prepare_data(cfg: Config) -> Path:
     return out
 
 
+def _iter_m3(d, stats: CleanStats, per: list[SourceStats]):
+    """All sources in order -> length filter -> normalised exact dedup -> prose heuristics ->
+    decontamination -> near-dedup. Dedup is global across sources; every drop is counted."""
+    for r in QUALITY_REASONS:
+        stats.dropped[r] = 0
+    decon = (Decontaminator(benchmark_texts(d.decontaminate)) if d.decontaminate else None)
+    near = NearDedup() if d.near_dedup else None
+    seen: set[bytes] = set()
+    for src in d.sources:
+        per.append(SourceStats(src.name))
+        for doc in iter_source(src, per[-1]):
+            stats.received += 1
+            try:
+                doc.encode("utf-8")
+            except UnicodeEncodeError:
+                stats.dropped["invalid_utf8"] += 1
+                continue
+            text = normalize_text(doc)
+            reason = ("too_short" if len(text) < d.min_chars else "too_long" if len(text) > d.max_chars
+                      else None)
+            if reason is None:
+                fp = fingerprint(text)
+                reason = "exact_duplicate" if fp in seen else None
+            if reason is None and d.quality_filters and src.prose:
+                reason = heuristic_reason(text)
+            if reason is None and decon is not None and decon.contaminated(text):
+                reason = "contaminated"
+            if reason is None and near is not None and near.is_duplicate(text):
+                reason = "near_duplicate"
+            if reason is not None:
+                stats.dropped[reason] += 1
+                continue
+            seen.add(fp)
+            stats.kept += 1
+            yield text
+        if per[-1].received == 0:
+            raise ValueError(f"data source '{src.name}' ({src.path}) is empty")
+
+
 def _cleaning_and_splits(d, clean: dict, splits: dict) -> list[str]:
     lines = ["## Cleaning (all sources, global dedup)", "", "| step | documents |", "|---|---:|",
              f"| received | {clean['received']:,} |"]
-    lines += [f"| dropped: {r} | {clean['dropped'][r]:,} |" for r in REASONS]
+    lines += [f"| dropped: {r} | {n:,} |" for r, n in clean["dropped"].items()]
     lines += [f"| kept | {clean['kept']:,} |", "", "## Splits", "",
               "| split | ratio | documents | UTF-8 bytes |", "|---|---:|---:|---:|"]
     lines += [f"| {s} | {d.split[s]} | {splits[s]['docs']:,} | {splits[s]['bytes']:,} |" for s in SPLITS]

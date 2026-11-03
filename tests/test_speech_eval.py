@@ -153,3 +153,25 @@ def test_eval_speech_reuses_saved_phases_and_floor_n(run, monkeypatch):
     assert calls == ["floor"]                      # only the missing phase ran
     assert d["model"] == first["model"] and d["ceiling"] == first["ceiling"]
     assert d["floor"]["n"] == 1
+
+
+def test_read_along_and_summary():
+    from llm.speech.evaluate import read_along, summarize_items
+
+    assert read_along("the cat sat", "the cat sat on the mat and more") == (0.0, 1.0)  # extra speech ignored
+    p, c = read_along("the cat sat down", "the dog sat down")
+    assert p == 0.25 and c == 0.25
+    items = [{"text": "a b c", "hypothesis": "a b c x y", "duration_ratio": 2.0},
+             {"text": " ".join(["w"] * 25), "hypothesis": "w", "duration_ratio": 0.1}]
+    d = summarize_items(items)
+    assert d["all"]["n"] == 2 and set(d["by_length_words"]) == {"1-20", "21-40"}
+    assert d["by_length_words"]["1-20"]["prefix_wer"] == 0.0
+
+
+def test_eval_speech_temperature_writes_separate_file(run):
+    assert cli.main(["eval-speech", str(run), "--n", "1", "--temperature", "0"]) == 0
+    other = run / "speech_eval_t0_k50.json"
+    d = json.loads(other.read_text())
+    assert d["sampling"] == {"temperature": 0.0, "top_k": 50}
+    assert "diagnostics" in d["model"]
+    assert cli.main(["speech-diagnose", str(other)]) == 0

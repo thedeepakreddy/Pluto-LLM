@@ -213,19 +213,50 @@ def _prepare_identity(args) -> int:
     return 0
 
 
+def _diagnose_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("eval_json", help="a speech_eval*.json written by eval-speech")
+
+
+@command("speech-diagnose", "read-along and by-length diagnostics from a speech_eval json (no GPU)",
+         _diagnose_args)
+def _speech_diagnose(args) -> int:
+    import json
+    from pathlib import Path
+
+    from llm.speech.evaluate import summarize_items
+
+    d = json.loads(Path(args.eval_json).read_text())
+    for phase in ("model", "floor"):
+        if phase not in d or "per_item" not in d[phase]:
+            continue
+        diag = summarize_items(d[phase]["per_item"])
+        print(f"== {phase} ==")
+        rows = [("all", diag["all"])] + list(diag["by_length_words"].items())
+        print(f"{'words':>8} {'n':>4} {'WER':>7} {'prefixWER':>9} {'read-ok':>8} {'dur':>6}")
+        for k, v in rows:
+            print(f"{k:>8} {v['n']:>4} {v['wer']:>7.3f} {v['prefix_wer']:>9.3f} "
+                  f"{v['correct_frac_median']:>8.2f} {v['duration_ratio_median']:>6.2f}")
+    return 0
+
+
 def _eval_speech_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("run_dir")
     p.add_argument("--n", type=int, default=200, help="held-out test chunks to score (default 200)")
     p.add_argument("--floor-n", type=int, default=None,
                    help="score the untrained floor on only the first N chunks (it is slow)")
     p.add_argument("--floor", action="store_true", help="also score a freshly initialised model (seed 0)")
+    p.add_argument("--temperature", type=float, default=None,
+                   help="voice-box sampling temperature (default 0.8; 0 = greedy); non-default "
+                        "values write speech_eval_t<T>_k<K>.json")
+    p.add_argument("--top-k", type=int, default=None, help="voice-box top-k (default 50)")
 
 
 @command("eval-speech", "Whisper-scored WER/CER, duration ratio and RTF for a speech run", _eval_speech_args)
 def _eval_speech(args) -> int:
     from llm.speech.evaluate import run_eval_speech
 
-    print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n))
+    print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n,
+                          temperature=args.temperature, top_k=args.top_k))
     return 0
 
 

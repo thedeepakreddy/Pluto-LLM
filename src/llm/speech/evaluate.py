@@ -16,7 +16,7 @@ import numpy as np
 from llm.config import AudioConfig
 from llm.speech.generate import SpeechSampling, real_time_factor, speak
 from llm.speech.interfaces import ASR, Codec
-from llm.speech.wer import char_error_rate, word_error_rate
+from llm.speech.wer import char_error_rate, normalize_words, word_error_rate
 
 DEMO_SET_VERSION = "speech-demo-v1"
 # Frozen: changing any sentence changes DEMO_SET_VERSION (checksum test in tests).
@@ -37,6 +37,49 @@ DEMO_SENTENCES = [
 def _score(refs: list[str], hyps: list[str]) -> tuple[float, float]:
     """Corpus-level WER/CER: concatenate the items (errors are weighted by length)."""
     return word_error_rate(" ".join(refs), " ".join(hyps)), char_error_rate(" ".join(refs), " ".join(hyps))
+
+
+LENGTH_BUCKETS = ((1, 20), (21, 40), (41, 60), (61, 10**9))  # reference length in words
+
+
+def read_along(ref: str, hyp: str) -> tuple[float, float]:
+    """How far the model follows its text before drifting.
+
+    Returns ``(prefix_wer, correct_frac)``: WER of the reference against only the first
+    ``len(ref)`` words of the hypothesis (so words spoken after the text ends are not counted), and
+    the fraction of reference words matched in order before the first mismatch."""
+    r, h = normalize_words(ref), normalize_words(hyp)
+    if not r:
+        return 0.0, 1.0
+    prefix = word_error_rate(" ".join(r), " ".join(h[: len(r)]))
+    k = 0
+    while k < min(len(r), len(h)) and r[k] == h[k]:
+        k += 1
+    return prefix, k / len(r)
+
+
+def summarize_items(items: list[dict]) -> dict:
+    """Diagnostics from per-item results: read-along scores overall and by reference length."""
+    def stats(group: list[dict]) -> dict:
+        refs = [it["text"] for it in group]
+        hyps = [it["hypothesis"] for it in group]
+        ra = [read_along(r, h) for r, h in zip(refs, hyps)]
+        durs = sorted(it["duration_ratio"] for it in group if it.get("duration_ratio") is not None)
+        n_ref = [len(normalize_words(r)) for r in refs]
+        errors = [it["wer"] * k if "wer" in it else word_error_rate(r, h) * k
+                  for it, r, h, k in zip(group, refs, hyps, n_ref)]
+        return {"n": len(group),
+                "wer": sum(errors) / max(sum(n_ref), 1),  # word errors / reference words
+                "prefix_wer": float(np.mean([p for p, _ in ra])) if ra else float("nan"),
+                "correct_frac_median": float(np.median([c for _, c in ra])) if ra else float("nan"),
+                "duration_ratio_median": float(np.median(durs)) if durs else float("nan")}
+
+    out = {"all": stats(items), "by_length_words": {}}
+    for lo, hi in LENGTH_BUCKETS:
+        group = [it for it in items if lo <= len(normalize_words(it["text"])) <= hi]
+        if group:
+            out["by_length_words"][f"{lo}-{hi}" if hi < 10**9 else f"{lo}+"] = stats(group)
+    return out
 
 
 def _progress(label: str, i: int, n: int) -> None:
@@ -68,7 +111,7 @@ def evaluate_speech(model, tok, codec: Codec, asr: ASR, examples: list[tuple[str
     return {"wer": wer, "cer": cer,
             "duration_ratio": gen_frames / ref_frames if ref_frames else float("nan"),
             "rtf": real_time_factor(gen_s, gen_frames, codec.frame_rate),
-            "n": len(examples), "per_item": items}
+            "n": len(examples), "diagnostics": summarize_items(items), "per_item": items}
 
 
 def ceiling_wer(codec: Codec, asr: ASR, examples: list[tuple[str, np.ndarray]], label: str = "") -> dict:
@@ -160,13 +203,16 @@ def _upload_eval(path, run_dir, hub_repo) -> None:
         print(f"warning: Hub upload of {path.name} failed: {e}", file=sys.stderr, flush=True)
 
 
-def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None):
+def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None,
+                    temperature: float | None = None, top_k: int | None = None):
     """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``.
 
     Each finished phase (ceiling, model, floor) is saved and, when the run has ``train.hub_repo``,
     uploaded to the Hub. Phases already saved for the same checkpoint and ``n`` are reused, so an
     interrupted evaluation continues instead of starting over. ``floor_n`` scores the (slow,
-    never-stopping) untrained floor on only the first ``floor_n`` chunks."""
+    never-stopping) untrained floor on only the first ``floor_n`` chunks. ``temperature``/``top_k``
+    override the voice-box sampling; non-default sampling writes ``speech_eval_t<T>_k<K>.json``
+    so it never replaces the default result."""
     import json
     from pathlib import Path
 
@@ -186,22 +232,31 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
     ds = SpeechShards(speech_dir(cfg), "test", cfg.audio.codebooks)
     examples = [(ds.text(i), ds[i][2]) for i in range(min(n, len(ds)))]
     codec, asr = make_codec(cfg.speech), make_asr(cfg.speech)
-    sampling = SpeechSampling()
+    default = SpeechSampling()
+    sampling = SpeechSampling(temperature=default.temperature if temperature is None else temperature,
+                              top_k=default.top_k if top_k is None else top_k)
     ckpt = find_latest_valid(run_dir)
-    path = run_dir / "speech_eval.json"
+    is_default = (sampling.temperature, sampling.top_k) == (default.temperature, default.top_k)
+    name = "speech_eval.json" if is_default else f"speech_eval_t{sampling.temperature:g}_k{sampling.top_k}.json"
+    path = run_dir / name
+    samp = {"temperature": sampling.temperature, "top_k": sampling.top_k}
     hub_repo = cfg.train.hub_repo
 
     def save():  # after every phase, so an interrupted eval keeps the finished phases
         atomic_write_json(path, json.loads(json.dumps(out)))
         _upload_eval(path, run_dir, hub_repo)
 
-    out = {"set": "held-out test, first chunks", "n_requested": n, "checkpoint": ckpt.name}
-    if path.exists():  # continue an interrupted evaluation of the same checkpoint and size
+    out = {"set": "held-out test, first chunks", "n_requested": n, "checkpoint": ckpt.name,
+           "sampling": samp}
+    if path.exists():  # continue an interrupted evaluation of the same checkpoint, size and sampling
         prev = json.loads(path.read_text())
-        if prev.get("checkpoint") == ckpt.name and prev.get("n_requested") == n:
+        prev_samp = prev.get("sampling", {"temperature": default.temperature, "top_k": default.top_k})
+        if prev.get("checkpoint") == ckpt.name and prev.get("n_requested") == n and prev_samp == samp:
             for phase in ("ceiling", "model", "floor"):
                 if phase in prev:
                     out[phase] = prev[phase]
+                    if phase != "ceiling" and "per_item" in out[phase]:  # older files lack these
+                        out[phase]["diagnostics"] = summarize_items(out[phase]["per_item"])
                     print(f"{phase}: reusing saved result", file=sys.stderr, flush=True)
     if "ceiling" not in out:
         out["ceiling"] = ceiling_wer(codec, asr, examples, label="ceiling")

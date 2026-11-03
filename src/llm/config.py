@@ -92,6 +92,10 @@ class ModelConfig:
     # M3 layer switches; the defaults are the M1/M2 architecture.
     pos: Literal["learned", "rope"] = "learned"
     rope_theta: float = 10000.0
+    sliding_window: int | None = None  # local attention span (tokens) for windowed layers
+    global_every: int = 0  # with sliding_window: every k-th layer keeps full attention (0: none)
+    mtp_heads: int = 0  # 1: DeepSeek-style multi-token prediction module (predicts token t+2)
+    mtp_weight: float = 0.3  # weight of the auxiliary MTP loss (training only)
     norm: Literal["layernorm", "rmsnorm"] = "layernorm"
     mlp: Literal["gelu", "swiglu"] = "gelu"
     n_kv_head: int | None = None  # None = n_head (multi-head); fewer = grouped-query attention
@@ -286,6 +290,14 @@ def _validate_model(m: ModelConfig) -> None:
     kv = m.n_kv_head or m.n_head
     if kv < 1 or m.n_head % kv != 0:
         raise ConfigError(f"model.n_kv_head ({m.n_kv_head}) must divide model.n_head ({m.n_head})")
+    if m.sliding_window is not None and m.sliding_window < 1:
+        raise ConfigError("model.sliding_window must be >= 1 (or unset for full attention)")
+    if m.global_every < 0:
+        raise ConfigError("model.global_every must be >= 0")
+    if m.mtp_heads not in (0, 1):
+        raise ConfigError("model.mtp_heads must be 0 or 1")
+    if m.mtp_heads and m.mtp_weight <= 0:
+        raise ConfigError("model.mtp_weight must be > 0")
     if m.pos == "rope" and (m.d_model // m.n_head) % 2 != 0:
         raise ConfigError("RoPE needs an even head dimension (d_model / n_head)")
 

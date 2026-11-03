@@ -379,22 +379,40 @@ def _bench_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--steps", type=int, default=20, help="timed optimizer steps (after 3 warmup)")
     p.add_argument("--tokens", type=float, default=None,
                    help="token budget to estimate hours for (default: train.max_steps * tokens_per_step)")
+    p.add_argument("--sweep", action="store_true",
+                   help="also benchmark KV-head counts, a sliding window and context lengths 4k/8k/16k")
 
 
 @command("bench", "measure training throughput, MFU and time for a token budget", _bench_args)
 def _bench(args) -> int:
     from llm.train.bench import bench
 
+    from llm.train.bench import sweep_configs
+
     cfg = _load(args)
-    r = bench(cfg, steps=args.steps)
     tokens = args.tokens or cfg.train.max_steps * cfg.train.tokens_per_step
-    mfu = f"{r['mfu']:.1%}" if r["mfu"] is not None else "n/a"
-    mem = f"{r['peak_mem_gb']:.1f} GB" if r["peak_mem_gb"] is not None else "n/a"
-    print(f"| device | params | tokens/s | step | peak mem | MFU | hours for {tokens:.3g} tokens |")
-    print("|---|---:|---:|---:|---:|---:|---:|")
-    print(f"| {r['device']} ({r['precision']}) | {r['params'] / 1e6:.1f}M | {r['tokens_per_s']:,.0f} | "
-          f"{r['step_s']:.2f}s | {mem} | {mfu} | {r['hours_for'](tokens):.1f} |")
+    rows = sweep_configs(cfg, contexts=(4096, 8192, 16384)) if args.sweep else [("baseline", cfg)]
+    print(f"| variant | device | attention | params | train tokens/s | step | peak mem | MFU | "
+          f"decode tok/s (batch 1) | hours for {tokens:.3g} tokens |")
+    print("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    for name, c in rows:
+        try:
+            r = bench(c, steps=args.steps)
+        except torch_oom() as e:  # report and continue the sweep
+            print(f"| {name} | out of memory: {str(e).splitlines()[0][:60]} |||||||||")
+            continue
+        mfu = f"{r['mfu']:.1%}" if r["mfu"] is not None else "n/a"
+        mem = f"{r['peak_mem_gb']:.1f} GB" if r["peak_mem_gb"] is not None else "n/a"
+        print(f"| {name} | {r['device']} ({r['precision']}) | {r['attention']} | {r['params'] / 1e6:.1f}M | "
+              f"{r['tokens_per_s']:,.0f} | {r['step_s']:.2f}s | {mem} | {mfu} | "
+              f"{r['decode_tokens_per_s']:,.0f} | {r['hours_for'](tokens):.1f} |", flush=True)
     return 0
+
+
+def torch_oom():
+    import torch
+
+    return torch.cuda.OutOfMemoryError
 
 
 def build_parser() -> argparse.ArgumentParser:

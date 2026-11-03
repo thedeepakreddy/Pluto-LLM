@@ -19,13 +19,63 @@ import torch.nn.functional as F
 from llm.config import ModelConfig
 
 
-def manual_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+def window_mask(t: int, S: int, start: int, window: int | None, device) -> torch.Tensor:
+    """Allowed[query, key] for t queries at absolute positions start.. and the last S keys
+    (absolute positions start+t-S ..): causal, and within `window` positions if set."""
+    q = torch.arange(start, start + t, device=device)[:, None]
+    k = torch.arange(start + t - S, start + t, device=device)[None, :]
+    ok = k <= q
+    return ok & (q - k < window) if window is not None else ok
+
+
+def manual_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                     window: int | None = None) -> torch.Tensor:
     """Reference causal attention: softmax(QK^T / sqrt(d) + mask) V. Shapes [B, H, T, Dh]."""
     T, S = q.size(-2), k.size(-2)  # S >= T: the last T keys are the new block, the rest is cache
     scores = (q @ k.transpose(-2, -1)) / math.sqrt(q.size(-1))
-    mask = torch.triu(torch.ones(T, S, dtype=torch.bool, device=q.device), diagonal=S - T + 1)
-    scores = scores.masked_fill(mask, float("-inf"))
+    scores = scores.masked_fill(~window_mask(T, S, S - T, window, q.device), float("-inf"))
     return torch.softmax(scores, dim=-1) @ v
+
+
+_FLEX: dict = {}
+
+
+def _flex_window(q, k, v, window: int) -> torch.Tensor | None:
+    """Sliding-window attention with FlexAttention (fused kernel) on CUDA; None if unavailable."""
+    if q.device.type != "cuda":
+        return None
+    try:
+        from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+    except ImportError:
+        return None
+    T = q.size(-2)
+    key = (T, window, q.device)
+    if key not in _FLEX:
+        def mask_mod(b, h, qi, ki):
+            return (ki <= qi) & (qi - ki < window)
+        _FLEX[key] = create_block_mask(mask_mod, None, None, T, T, device=q.device)
+    if "fn" not in _FLEX:
+        _FLEX["fn"] = torch.compile(flex_attention, dynamic=False)
+    return _FLEX["fn"](q, k, v, block_mask=_FLEX[key])
+
+
+def _attend(q, k, v, impl: str, window: int | None, start: int, dropout: float = 0.0) -> torch.Tensor:
+    """Causal (optionally sliding-window) attention of q over k, v (already expanded for GQA)."""
+    T, S = q.size(-2), k.size(-2)
+    if impl != "sdpa":
+        return manual_attention(q, k, v, window)
+    if window is None or window >= start + T:  # the window covers everything: plain causal
+        if T == S:
+            return F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout)
+        if T == 1:
+            return F.scaled_dot_product_attention(q, k, v)
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=window_mask(T, S, start, None, q.device))
+    if T == S and dropout == 0.0:
+        out = _flex_window(q, k, v, window)
+        if out is not None:
+            return out
+    return F.scaled_dot_product_attention(q, k, v, attn_mask=window_mask(T, S, start, window, q.device),
+                                          dropout_p=dropout)
 
 
 class RMSNorm(nn.Module):
@@ -59,9 +109,10 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
 
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, window: int | None = None):
         super().__init__()
         self.n_head, self.impl, self.dropout = cfg.n_head, cfg.attn_impl, cfg.dropout
+        self.window = window
         self.n_kv = cfg.n_kv_head or cfg.n_head
         self.dh = cfg.d_model // cfg.n_head
         self.rope = cfg.pos == "rope"
@@ -90,38 +141,30 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.shape
         q, k, v = self._qkv(x, rope, 0)
         k, v = self._expand(k), self._expand(v)
-        if self.impl == "sdpa":
-            y = F.scaled_dot_product_attention(
-                q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0)
-        else:
-            y = manual_attention(q, k, v)
+        y = _attend(q, k, v, self.impl, self.window, 0, self.dropout if self.training else 0.0)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_drop(self.proj(y))
 
     def forward_cached(self, x: torch.Tensor, past: tuple[torch.Tensor, torch.Tensor] | None,
-                       rope=None):
+                       rope=None, start: int | None = None):
         """Attend a block of t new tokens over `past` (K, V: [B,H_kv,P,Dh]) plus themselves.
 
-        New token j sees all P cached positions and new positions <= j.
-        Returns (output [B,t,C], (K, V) with T_total = P + t).
+        `start` is the absolute position of the first new token (default: the cache length; it
+        differs once a sliding-window layer has dropped old keys). Returns (output [B,t,C],
+        (K, V)); a windowed layer keeps only its last window - 1 keys.
         """
         B, t, C = x.shape
-        P0 = 0 if past is None else past[0].size(2)
+        P0 = (0 if past is None else past[0].size(2)) if start is None else start
         q, k, v = self._qkv(x, rope, P0)
         if past is not None:
             k = torch.cat([past[0], k], dim=2)
             v = torch.cat([past[1], v], dim=2)
         cache = (k, v)
+        if self.window is not None and k.size(2) > self.window - 1:
+            keep = k.size(2) - (self.window - 1)
+            cache = (k[:, :, keep:], v[:, :, keep:])
         k, v = self._expand(k), self._expand(v)
-        P = k.size(2) - t
-        if self.impl == "sdpa":
-            if t == 1:
-                mask = None  # a single query may see every key
-            else:
-                mask = torch.ones(t, P + t, dtype=torch.bool, device=x.device).tril(diagonal=P)
-            y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
-        else:
-            y = manual_attention(q, k, v)
+        y = _attend(q, k, v, self.impl, self.window, P0)
         y = y.transpose(1, 2).contiguous().view(B, t, C)
         return self.resid_drop(self.proj(y)), cache
 
@@ -147,10 +190,10 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, window: int | None = None):
         super().__init__()
         self.ln1 = make_norm(cfg)
-        self.attn = CausalSelfAttention(cfg)
+        self.attn = CausalSelfAttention(cfg, window)
         self.ln2 = make_norm(cfg)
         self.mlp = MLP(cfg)
 
@@ -158,8 +201,8 @@ class Block(nn.Module):
         x = x + self.attn(self.ln1(x), rope)
         return x + self.mlp(self.ln2(x))
 
-    def forward_cached(self, x: torch.Tensor, past, rope=None):
-        a, kv = self.attn.forward_cached(self.ln1(x), past, rope)
+    def forward_cached(self, x: torch.Tensor, past, rope=None, start: int | None = None):
+        a, kv = self.attn.forward_cached(self.ln1(x), past, rope, start)
         x = x + a
         return x + self.mlp(self.ln2(x)), kv
 
@@ -175,13 +218,18 @@ class GPT(nn.Module):
             self.register_buffer("rope_cos", cos, persistent=False)
             self.register_buffer("rope_sin", sin, persistent=False)
         self.drop = nn.Dropout(cfg.dropout)
-        self.blocks = nn.ModuleList(Block(cfg) for _ in range(cfg.n_layer))
+        self.blocks = nn.ModuleList(Block(cfg, layer_window(cfg, i)) for i in range(cfg.n_layer))
         self.ln_f = make_norm(cfg)
         self.lm_head = nn.Linear(cfg.d_model, vocab_size, bias=False)
         self.lm_head.weight = self.tok_emb.weight
+        if cfg.mtp_heads:  # DeepSeek-V3-style MTP: [norm(h_t); norm(emb(x_t+1))] -> block -> x_t+2
+            self.mtp_norm_h, self.mtp_norm_e, self.mtp_ln = make_norm(cfg), make_norm(cfg), make_norm(cfg)
+            self.mtp_proj = nn.Linear(2 * cfg.d_model, cfg.d_model, bias=False)
+            self.mtp_block = Block(cfg)
+        self.last_losses: dict[str, float] = {}
         self.apply(self._init_weights)
         resid_std = 0.02 / math.sqrt(2 * cfg.n_layer)
-        for b in self.blocks:
+        for b in [*self.blocks, *([self.mtp_block] if cfg.mtp_heads else [])]:
             nn.init.normal_(b.attn.proj.weight, 0.0, resid_std)
             nn.init.normal_(b.mlp.proj.weight, 0.0, resid_std)
 
@@ -206,6 +254,16 @@ class GPT(nn.Module):
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.float().view(-1, logits.size(-1)), targets.reshape(-1))
+            if self.cfg.mtp_heads and not torch.compiler.is_compiling():
+                self.last_losses = {"main": loss.item()}  # for logging (eager mode only)
+            if self.cfg.mtp_heads and self.training and T > 1:
+                z = self.mtp_proj(torch.cat([self.mtp_norm_h(x[:, :-1]),
+                                             self.mtp_norm_e(self.tok_emb(targets[:, :-1]))], dim=-1))
+                lg2 = self.lm_head(self.mtp_ln(self.mtp_block(z, rope)))
+                mtp = F.cross_entropy(lg2.float().reshape(-1, lg2.size(-1)), targets[:, 1:].reshape(-1))
+                if not torch.compiler.is_compiling():
+                    self.last_losses["mtp"] = mtp.item()
+                loss = loss + self.cfg.mtp_weight * mtp
         return logits, loss
 
     def forward_cached(self, idx: torch.Tensor, cache: list | None, start_pos: int):
@@ -224,7 +282,7 @@ class GPT(nn.Module):
         rope = self._rope()
         new_cache = []
         for i, block in enumerate(self.blocks):
-            x, kv = block.forward_cached(x, None if cache is None else cache[i], rope)
+            x, kv = block.forward_cached(x, None if cache is None else cache[i], rope, start_pos)
             new_cache.append(kv)
         return self.lm_head(self.ln_f(x)), new_cache
 
@@ -246,6 +304,13 @@ class GPT(nn.Module):
         return n
 
 
+def layer_window(cfg: ModelConfig, i: int) -> int | None:
+    """Sliding window of layer i, or None for full attention."""
+    if cfg.sliding_window is None or (cfg.global_every and (i + 1) % cfg.global_every == 0):
+        return None
+    return cfg.sliding_window
+
+
 def expected_num_params(cfg: ModelConfig, vocab_size: int) -> int:
     V, T, L, d = vocab_size, cfg.context_length, cfg.n_layer, cfg.d_model
     kvd = (cfg.n_kv_head or cfg.n_head) * (d // cfg.n_head)
@@ -257,4 +322,5 @@ def expected_num_params(cfg: ModelConfig, vocab_size: int) -> int:
     else:
         mlp = 8 * d * d + 5 * d
     pos = T * d if cfg.pos == "learned" else 0
-    return V * d + pos + L * (attn + mlp + 2 * norm) + norm
+    mtp = (3 * norm + 2 * d * d + attn + mlp + 2 * norm) if cfg.mtp_heads else 0
+    return V * d + pos + L * (attn + mlp + 2 * norm) + norm + mtp

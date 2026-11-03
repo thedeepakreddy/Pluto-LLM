@@ -3,7 +3,8 @@
 Usage (from the repo root, after `git pull`):
     modal run modal_app/m3_train.py --steps check                       # CPU, ~2 min: 3 rows per source
     modal run --detach modal_app/m3_train.py --steps prepare,tokenizer,shards   # CPU, several hours
-    PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml
+    PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep
+    PLUTO_GPU=L4 modal run --detach modal_app/m3_train.py --steps ab     # layer A/B tests, ~20M model
     PLUTO_GPU=H100 modal run --detach modal_app/m3_train.py --steps train --config configs/m3-pilot.yaml
     PLUTO_GPU=H100 modal run --detach modal_app/m3_train.py --steps resume --run runs/<run-id>
     modal run modal_app/m3_train.py --steps summary                     # CPU: metrics and evals
@@ -28,7 +29,19 @@ BRANCH = "main"
 GPU = os.environ.get("PLUTO_GPU", "H100")
 DATA_CONFIG = "configs/m3-pilot.yaml"  # data/tokenizer/shards sections are shared by all M3 configs
 CPU_STEPS = ("check", "prepare", "tokenizer", "shards")
-GPU_STEPS = ("bench", "train", "resume")
+GPU_STEPS = ("bench", "train", "resume", "ab")
+# Layer A/B tests on the ~20M base (one change each, then all): same data, seed and tokens.
+AB_VARIANTS = [
+    ("base", ()),
+    ("rope", ("model.pos=rope",)),
+    ("rmsnorm", ("model.norm=rmsnorm",)),
+    ("swiglu", ("model.mlp=swiglu",)),
+    ("gqa", ("model.n_kv_head=2",)),
+    ("window", ("model.pos=rope", "model.sliding_window=256", "model.global_every=4")),
+    ("mtp", ("model.mtp_heads=1",)),
+    ("all", ("model.pos=rope", "model.norm=rmsnorm", "model.mlp=swiglu", "model.n_kv_head=2",
+             "model.sliding_window=256", "model.global_every=4", "model.mtp_heads=1")),
+]
 _SAFE = re.compile(r"^[\w./-]+$")  # config paths and run dirs only: no shell syntax
 
 image = (
@@ -42,13 +55,23 @@ WORK = "/vol/Pluto-LLM"
 SECRETS = [modal.Secret.from_name("pluto-hf")]
 
 
-def gpu_command(step: str, config: str, run: str, hub: str) -> str:
+def ab_commands(hub: str) -> list[str]:
+    """One `llm train` per A/B variant, each its own run name."""
+    out = []
+    for name, sets in AB_VARIANTS:
+        flags = "".join(f" --set {s}" for s in sets)
+        out.append(f"llm train configs/m3-ab-base.yaml{flags} --set run.name=m3-ab-{name} "
+                   f"--set train.hub_repo={hub}")
+    return out
+
+
+def gpu_command(step: str, config: str, run: str, hub: str, sweep: bool = False) -> str:
     """The fixed `llm` command for a GPU step (inputs are validated paths, never shell text)."""
     for v in (config, run):
         if v and not _SAFE.match(v):
             raise ValueError(f"not a plain path: {v!r}")
     if step == "bench":
-        return f"llm bench {config}"
+        return f"llm bench {config}" + (" --sweep" if sweep else "")
     if step == "train":
         return f"llm train {config} --set train.hub_repo={hub}"
     if step == "resume":
@@ -136,15 +159,40 @@ def cpu_job(steps: list[str]) -> None:
 
 
 @app.function(gpu=GPU, cpu=8, memory=65536, timeout=24 * 3600, volumes={"/vol": volume}, secrets=SECRETS)
-def gpu_job(step: str, config: str, run: str) -> None:
+def gpu_job(step: str, config: str, run: str, sweep: bool = False, only: str = "") -> None:
     hub = _checkout()
     _sh("nvidia-smi --query-gpu=name,memory.total --format=csv")
     try:
+        if step == "ab":
+            names = [n for n, _ in AB_VARIANTS]
+            for name, cmd in zip(names, ab_commands(hub)):
+                if only and name not in only.split(","):
+                    continue
+                if glob_done(name):
+                    print(f"skip {name}: a finished m3-ab-{name} run exists", flush=True)
+                    continue
+                _sh(cmd)
+                volume.commit()
+            return
         if step == "resume" and not os.path.exists(f"{WORK}/{run}/config.yaml"):
             _sh(f"llm pull-run {hub} {os.path.basename(run)}")  # e.g. after the Volume was reset
-        _sh(gpu_command(step, config, run, hub))
+        _sh(gpu_command(step, config, run, hub, sweep))
     finally:
         volume.commit()
+
+
+def glob_done(name: str) -> bool:
+    """True if an A/B run for this variant already reached max_steps (re-running `ab` resumes the set)."""
+    import glob
+    import json
+
+    import yaml
+
+    for m in glob.glob(f"{WORK}/runs/m3-ab-{name}-*/metrics.jsonl"):
+        max_steps = yaml.safe_load(open(m.replace("metrics.jsonl", "config.yaml")))["train"]["max_steps"]
+        if any(json.loads(line).get("step") == max_steps for line in open(m)):
+            return True
+    return False
 
 
 @app.function(timeout=1800, volumes={"/vol": volume})
@@ -170,7 +218,7 @@ def summary() -> None:
 
 
 @app.local_entrypoint()
-def main(steps: str = "check", config: str = "", run: str = ""):
+def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = False, only: str = ""):
     chosen = [s.strip() for s in steps.split(",") if s.strip()]
     if chosen == ["summary"]:
         summary.remote()
@@ -192,4 +240,6 @@ def main(steps: str = "check", config: str = "", run: str = ""):
     if gpu:
         gpu_command(gpu[0], config, run, "x/y")  # validate before starting a GPU
         print(f"GPU step {gpu[0]} on {GPU}")
-        gpu_job.remote(gpu[0], config, run)
+        if only and not re.match(r"^[\w,]+$", only):
+            raise SystemExit("--only takes variant names, e.g. --only rope,window")
+        gpu_job.remote(gpu[0], config, run, sweep, only)

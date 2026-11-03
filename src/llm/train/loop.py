@@ -361,7 +361,8 @@ class TextTrainer(BaseTrainer):
         x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
         with self.autocast():
             _, loss = self.fwd(x, y)
-        return loss, {}
+        parts = {f"loss_{k}": v for k, v in self.model.last_losses.items()} if self.cfg.model.mtp_heads else {}
+        return loss, parts
 
     def evaluate(self) -> dict:
         s = self.state

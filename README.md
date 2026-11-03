@@ -9,6 +9,7 @@ evaluation/report pipeline. It is the foundation for **Mini-Live**, a small nati
 model that listens and talks back in real time, and longer term a model that can see, talk and text.
 
 - Decisions and roadmap: [`docs/01-decisions.md`](docs/01-decisions.md)
+- Plan after M2 (M3–M6): [`docs/02-roadmap-m3-m6.md`](docs/02-roadmap-m3-m6.md)
 - Technical report (M1–M2, in progress): [`docs/papers/pluto-m1-m2-technical-report.md`](docs/papers/pluto-m1-m2-technical-report.md)
 - Milestone 1 design: [`docs/superpowers/specs/2026-11-01-m1-text-pipeline-design.md`](docs/superpowers/specs/2026-11-01-m1-text-pipeline-design.md)
 

@@ -115,6 +115,7 @@ class TrainConfig:
     cost_per_hour: float = 0.0
     wandb_project: str | None = None
     hub_repo: str | None = None
+    init_from: str | None = None  # text runs: start from these weights (fresh optimizer, step 0)
 
 
 @dataclass(frozen=True)

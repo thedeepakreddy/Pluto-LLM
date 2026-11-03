@@ -8,6 +8,7 @@ stop except "nan" saves a checkpoint first; "nan" keeps the last good one.
 from __future__ import annotations
 
 import contextlib
+import json
 import math
 import random
 import signal
@@ -24,7 +25,7 @@ from llm.config import (Config, ConfigError, TrainConfig, config_diff, config_to
 from llm.data.prepare import data_dir
 from llm.eval.metrics import evaluate
 from llm.eval.prompts import run_prompt_eval
-from llm.manifest import ProvenanceError, manifest_checksum
+from llm.manifest import ProvenanceError, atomic_write_json, manifest_checksum, sha256_file
 from llm.model.gpt import GPT
 from llm.runs import append_jsonl
 from llm.shards import DataPosition, TokenChunks, next_batch, shard_dir, verify_shard_provenance
@@ -330,6 +331,26 @@ class TextTrainer(BaseTrainer):
         return {"shards": manifest_checksum(shard_dir(cfg)),
                 "tokenizer": manifest_checksum(tokenizer_dir(cfg)),
                 "data": manifest_checksum(data_dir(cfg))}
+
+    def on_fresh_start(self) -> None:
+        if self.t.init_from is None:
+            return
+        path = Path(self.t.init_from)
+        src = torch.load(path, map_location="cpu", weights_only=True)["model"]
+        own = self.model.state_dict()
+        missing, extra = sorted(set(own) - set(src)), sorted(set(src) - set(own))
+        if missing or extra:
+            raise ValueError(f"{path}: parameters differ (missing {missing}, unexpected {extra})")
+        for k, v in src.items():
+            if v.shape != own[k].shape:
+                raise ValueError(f"{path}: parameter {k} has shape {tuple(v.shape)}, this model needs "
+                                 f"{tuple(own[k].shape)} (a learned-position table cannot change "
+                                 "context_length; use model.pos=rope)")
+        self.model.load_state_dict(src)
+        run_json = self.run_dir / "run.json"
+        info = json.loads(run_json.read_text()) if run_json.exists() else {}
+        info["init_from"] = {"path": str(path), "sha256": sha256_file(path), "at": time.time()}
+        atomic_write_json(run_json, info)
 
     def next_batch(self, pos: DataPosition, micro: int):
         x, y, pos = next_batch(self.train_chunks, pos, self.t.micro_batch_size, self.t.seed)

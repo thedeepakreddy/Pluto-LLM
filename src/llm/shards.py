@@ -8,7 +8,10 @@ position is just (epoch, index) and resuming is exact.
 from __future__ import annotations
 
 import bisect
+import itertools
 import json
+import multiprocessing as mp
+import time
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +24,33 @@ from llm.data.split import SPLITS
 from llm.manifest import (ProvenanceError, manifest_checksum, read_manifest, verify_files,
                           verify_input, write_manifest)
 from llm.tokenizer.bpe import BPETokenizer, tokenizer_dir
+
+
+BATCH_DOCS = 256  # documents per pool task; results come back in input order
+
+_worker_tok: BPETokenizer | None = None
+_worker_code = "H"
+
+
+def _init_worker(tdir: str, code: str) -> None:
+    global _worker_tok, _worker_code
+    _worker_tok, _worker_code = BPETokenizer.load(Path(tdir)), code  # once per worker process
+
+
+def _encode_batch(lines: list[str]) -> tuple[array, int]:
+    """Encode a batch to one packed array (each document followed by EOT) and its UTF-8 bytes."""
+    ids, n_bytes = array(_worker_code), 0
+    for line in lines:
+        text = json.loads(line)["text"]
+        ids.extend(_worker_tok.encode(text))
+        ids.append(_worker_tok.eot_id)
+        n_bytes += len(text.encode("utf-8"))
+    return ids, n_bytes  # a packed array pickles far cheaper than lists of ints
+
+
+def _batches(f):
+    while batch := list(itertools.islice(f, BATCH_DOCS)):
+        yield batch
 
 
 def shard_dtype(vocab_size: int) -> np.dtype:
@@ -48,37 +78,54 @@ def write_shards(cfg) -> Path:
         old.unlink()
 
     splits, files = {}, []
-    for split in SPLITS:
-        names: list[str] = []
-        buf = array(code)
-        n_tokens = n_bytes = 0
-
-        def flush(final: bool) -> None:
-            nonlocal buf
-            while len(buf) >= size or (final and len(buf) > 0):
-                name = f"{split}_{len(names):03d}.bin"
-                np.frombuffer(buf[:size], dtype=dt).tofile(out / name)
-                names.append(name)
-                buf = buf[size:]
-
-        with open(ddir / f"{split}.jsonl", encoding="utf-8") as f:
-            for line in f:
-                text = json.loads(line)["text"]
-                ids = tok.encode(text)
-                ids.append(tok.eot_id)
-                buf.extend(ids)
-                n_tokens += len(ids)
-                n_bytes += len(text.encode("utf-8"))
-                if len(buf) >= size:
-                    flush(final=False)
-        flush(final=True)
-        splits[split] = {"tokens": n_tokens, "bytes": n_bytes, "files": names}
-        files += names
+    pool = (mp.get_context("spawn").Pool(cfg.shards.workers, _init_worker, (str(tdir), code))
+            if cfg.shards.workers > 1 else None)
+    if pool is None:
+        _init_worker(str(tdir), code)
+    try:
+        for split in SPLITS:
+            _write_split(split, ddir, out, tok, dt, code, size, pool, cfg.shards.workers, splits, files)
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
 
     write_manifest(out, kind="shards", name=cfg.shards.name, version=cfg.shards.version, files=files,
                    inputs={"tokenizer": manifest_checksum(tdir), "data": manifest_checksum(ddir)},
                    extra={"dtype": dt.name, "vocab_size": tok.vocab_size, "splits": splits})
     return out
+
+
+def _write_split(split, ddir, out, tok, dt, code, size, pool, workers, splits, files) -> None:
+    names: list[str] = []
+    buf = array(code)
+    n_tokens = n_bytes = 0
+
+    def flush(final: bool) -> None:
+        nonlocal buf
+        while len(buf) >= size or (final and len(buf) > 0):
+            name = f"{split}_{len(names):03d}.bin"
+            np.frombuffer(buf[:size], dtype=dt).tofile(out / name)
+            names.append(name)
+            buf = buf[size:]
+
+    t0 = time.perf_counter()
+    with open(ddir / f"{split}.jsonl", encoding="utf-8") as f:
+        encoded = (pool.imap(_encode_batch, _batches(f)) if pool is not None  # ordered
+                   else map(_encode_batch, _batches(f)))
+        for ids, nb in encoded:
+            buf.extend(ids)
+            n_tokens += len(ids)
+            n_bytes += nb
+            if len(buf) >= size:
+                flush(final=False)
+    flush(final=True)
+    secs = time.perf_counter() - t0
+    if n_tokens:
+        print(f"[shards] {split}: {n_tokens:,} tokens in {secs:.1f}s "
+              f"({n_tokens / max(secs, 1e-9):,.0f} tokens/s, workers={workers})")
+    splits[split] = {"tokens": n_tokens, "bytes": n_bytes, "files": names}
+    files += names
 
 
 def verify_shard_provenance(cfg) -> None:

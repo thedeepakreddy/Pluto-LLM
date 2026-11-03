@@ -63,6 +63,7 @@ class ShardConfig:
     version: int
     shard_size_tokens: int = 100_000_000
     root: str = "shards"
+    workers: int = 1  # >1: encode documents in a process pool (output identical to 1)
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ model that listens and talks back in real time, and longer term a model that can
 | Milestone | What | Status |
 |---|---|---|
 | M1 | Text pipeline end-to-end | ✅ done: [first run report](results/m1/m1-tinystories-20261101-205014-d0a9bc2/report.md) |
-| M2 | First voice model (~30M) on self-made TinyStories-Speech | built; first GPU run pending |
+| M2 | First voice model (~30M) on self-made TinyStories-Speech | ✅ done: **18.8% WER** (text-then-audio), [results](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4) |
 | M3 | ~100M text "brain" on FineWeb-Edu | planned |
 | M4 | ~100M speech + text model | planned |
 | M5 | Real-time spoken dialogue (Mini-Live) | planned |
@@ -88,12 +88,14 @@ If the whole session dies (Kaggle/Colab), set `train.hub_repo` and an `HF_TOKEN`
 directory and checkpoints are synced to a private Hugging Face repo, and
 `llm pull-run <hub_repo> <run_id>` restores it before `llm resume`.
 
-## Milestone 2: first voice (built; first GPU run pending)
+## Milestone 2: first voice
 
 M2 teaches Pluto to talk: a ~30M-parameter speech+text model (an 8-layer "brain", d 384, context
 640, plus a 3-layer depth "voice box" that predicts the 8 Mimi codebooks of each 80 ms frame),
 trained on **TinyStories-Speech**, a dataset we synthesize ourselves by reading TinyStories aloud.
-No M2 results exist yet; nothing below is a measured claim.
+**Result:** on 200 held-out passages the text-then-audio model reaches **18.8% WER** with correct
+timing (codec ceiling 1.3%, untrained floor 689%); the aligned layout's decoder stalls (192% WER),
+diagnosed and under repair. Details: [technical report §3.8](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4).
 
 ### Off-the-shelf components (disclosed)
 

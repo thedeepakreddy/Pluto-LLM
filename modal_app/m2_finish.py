@@ -15,7 +15,7 @@ Run (``--detach`` keeps it running if you close the terminal):
     PLUTO_GPU=T4 modal run --detach modal_app/m2_finish.py                # a different GPU
     modal run modal_app/m2_finish.py --steps summary                      # print all results (CPU)
 
-Steps: setup, diagnostics, baseline, floor, demo, report (default: all, in that order).
+Steps: setup, diagnostics, baseline, floor, demo, report, texttemp (default: all, in that order).
 PLUTO_BASELINE_N (default 50) sets how many test chunks the baseline is scored on.
 Logs: printed here and in the Modal dashboard. Cost: shown in the Modal dashboard (an L4 or T4
 for ~3 h is a few dollars of credit).
@@ -38,7 +38,7 @@ ALIGNED = "configs/m2-speech-aligned.yaml"
 # Order: the most informative and cheapest results first. The baseline's babbling outputs are slow
 # to transcribe (~2.5 min per chunk on an L4), so it is scored on the first 50 test chunks: the
 # same chunks as the first 50 of the aligned 200-chunk result, so the comparison stays matched.
-ALL_STEPS = ("setup", "diagnostics", "baseline", "floor", "demo", "report")
+ALL_STEPS = ("setup", "diagnostics", "baseline", "floor", "demo", "report", "texttemp")
 BASELINE_N = int(os.environ.get("PLUTO_BASELINE_N", "50"))
 SPACY_WHEEL = ("en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/"
                "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl")
@@ -114,6 +114,14 @@ def finish(steps: list[str]) -> None:
         if "diagnostics" in steps:
             for flags, tag in DIAGNOSTICS:
                 print(f"\n===== diagnostic: {flags}", flush=True)
+                _sh(f"llm eval-speech {ALIGNED_RUN} --n 50 {flags}")
+                _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval_{tag}.json")
+                volume.commit()
+        if "texttemp" in steps:  # hypothesis: greedy next-word-or-wait choice stalls the text
+            for flags, tag in (("--text-temperature 1", "t0.8_k50_tt1"),
+                               ("--text-temperature 0.7", "t0.8_k50_tt0.7"),
+                               ("--text-temperature 1 --max-pad-run 12", "t0.8_k50_pad12_tt1")):
+                print(f"\n===== text-temperature diagnostic: {flags}", flush=True)
                 _sh(f"llm eval-speech {ALIGNED_RUN} --n 50 {flags}")
                 _sh(f"llm speech-diagnose {ALIGNED_RUN}/speech_eval_{tag}.json")
                 volume.commit()

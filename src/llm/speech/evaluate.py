@@ -211,7 +211,7 @@ def _upload_eval(path, run_dir, hub_repo) -> None:
 
 def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | None = None,
                     temperature: float | None = None, top_k: int | None = None,
-                    max_pad_run: int | None = None):
+                    max_pad_run: int | None = None, text_temperature: float | None = None):
     """Score a speech run on its first ``n`` test chunks; writes ``<run>/speech_eval.json``.
 
     Each finished phase (ceiling, model, floor) is saved and, when the run has ``train.hub_repo``,
@@ -243,12 +243,15 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
     default = SpeechSampling()
     sampling = SpeechSampling(temperature=default.temperature if temperature is None else temperature,
                               top_k=default.top_k if top_k is None else top_k,
-                              max_pad_run=max_pad_run)
+                              max_pad_run=max_pad_run,
+                              text_temperature=(default.text_temperature if text_temperature is None
+                                                else text_temperature))
     ckpt = find_latest_valid(run_dir)
-    is_default = ((sampling.temperature, sampling.top_k, sampling.max_pad_run)
-                  == (default.temperature, default.top_k, None))
+    is_default = ((sampling.temperature, sampling.top_k, sampling.max_pad_run, sampling.text_temperature)
+                  == (default.temperature, default.top_k, None, default.text_temperature))
     tag = f"t{sampling.temperature:g}_k{sampling.top_k}" + (
-        f"_pad{sampling.max_pad_run}" if sampling.max_pad_run is not None else "")
+        f"_pad{sampling.max_pad_run}" if sampling.max_pad_run is not None else "") + (
+        f"_tt{sampling.text_temperature:g}" if sampling.text_temperature != default.text_temperature else "")
     path = run_dir / ("speech_eval.json" if is_default else f"speech_eval_{tag}.json")
     if path.exists():  # a run of a different size never overwrites an existing result
         prev_n = json.loads(path.read_text()).get("n_requested")
@@ -257,6 +260,8 @@ def run_eval_speech(run_dir, n: int = 200, floor: bool = False, floor_n: int | N
     samp = {"temperature": sampling.temperature, "top_k": sampling.top_k}
     if sampling.max_pad_run is not None:
         samp["max_pad_run"] = sampling.max_pad_run
+    if sampling.text_temperature != default.text_temperature:
+        samp["text_temperature"] = sampling.text_temperature
     hub_repo = cfg.train.hub_repo
 
     def save():  # after every phase, so an interrupted eval keeps the finished phases

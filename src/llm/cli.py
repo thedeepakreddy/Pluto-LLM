@@ -254,6 +254,9 @@ def _eval_speech_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-pad-run", type=int, default=None,
                    help="aligned only: place the next word if the text head waits more than N "
                         "frames in a row (decoding experiment; default off)")
+    p.add_argument("--text-temperature", type=float, default=None,
+                   help="aligned: sample the text head's next-word-or-wait choice at this "
+                        "temperature instead of greedily (default 0 = greedy)")
 
 
 @command("eval-speech", "Whisper-scored WER/CER, duration ratio and RTF for a speech run", _eval_speech_args)
@@ -262,7 +265,7 @@ def _eval_speech(args) -> int:
 
     print(run_eval_speech(args.run_dir, n=args.n, floor=args.floor, floor_n=args.floor_n,
                           temperature=args.temperature, top_k=args.top_k,
-                          max_pad_run=args.max_pad_run))
+                          max_pad_run=args.max_pad_run, text_temperature=args.text_temperature))
     return 0
 
 

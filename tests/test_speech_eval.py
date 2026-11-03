@@ -188,3 +188,9 @@ def test_eval_records_text_placement_and_pacing_guard(run):
     assert {"tokens_total", "tokens_placed", "tokens_forced", "hit_frame_limit"} <= set(it)
     assert it["tokens_placed"] <= it["tokens_total"]
     assert "hit_frame_limit_frac" in d["model"]["diagnostics"]["all"]
+
+
+def test_eval_speech_text_temperature_tag(run):
+    assert cli.main(["eval-speech", str(run), "--n", "1", "--text-temperature", "1"]) == 0
+    d = json.loads((run / "speech_eval_t0.8_k50_tt1.json").read_text())
+    assert d["sampling"]["text_temperature"] == 1.0

@@ -53,6 +53,8 @@ class TokenizerConfig:
     vocab_size: int
     train_sample_bytes: int = 100_000_000
     root: str = "tokenizers"
+    special_tokens: tuple[str, ...] = ()  # named control tokens (M3: llm.tokenizer.bpe.PLUTO_SPECIALS)
+    reserved_spare: int = 0  # extra unused tokens <spare_0>.. for future abilities
 
 
 @dataclass(frozen=True)

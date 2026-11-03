@@ -94,8 +94,8 @@ M2 teaches Pluto to talk: a ~30M-parameter speech+text model (an 8-layer "brain"
 640, plus a 3-layer depth "voice box" that predicts the 8 Mimi codebooks of each 80 ms frame),
 trained on **TinyStories-Speech**, a dataset we synthesize ourselves by reading TinyStories aloud.
 **Result:** on 200 held-out passages the text-then-audio model reaches **18.8% WER** with correct
-timing (codec ceiling 1.3%, untrained floor 689%); the aligned layout's decoder stalls (192% WER),
-diagnosed and under repair. Details: [technical report §3.8](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4).
+timing (codec ceiling 1.3%, untrained floor 689%); the aligned layout rarely advances to the next word (192% WER;
+91% with decoding fixes), a training fix is planned for M4. Details: [technical report §3.8](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4).
 
 ### Off-the-shelf components (disclosed)
 

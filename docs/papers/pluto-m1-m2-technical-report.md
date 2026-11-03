@@ -6,7 +6,8 @@ thedeepakreddy · November 2026 · Repository: `thedeepakreddy/Pluto-LLM`
 > **Status.** Milestones 1 and 2 are trained and evaluated. M2's headline: the text-then-audio model
 > (~30M parameters) speaks held-out passages at **18.8% WER** with correct timing (duration ratio
 > 1.00), against a 1.3% codec ceiling and a 689% untrained floor. The aligned layout underperforms
-> because its decoder stalls on the next-word choice (§3.8); a decoding fix is being tested.
+> because the model rarely advances to the next word (§3.8); decoding fixes reduce its WER from 192%
+> to 91% but a training-side fix is needed (planned for M4).
 
 ---
 
@@ -233,12 +234,19 @@ Decoding experiments (aligned, first 50 chunks):
 | voice T=0 (greedy) | 252% | 67% | 28% | 96% |
 | voice T=0.8 + pacing guard (place next token after 12 waiting frames) | **106%** | 59% | 88% | 64% |
 | voice T=0.5 + pacing guard | 109% | 54% | 97% | 54% |
+| text head sampled, T=0.7 | 195% | 71% | 27% | 94% |
+| text head sampled, T=1 | 199% | 68% | 27% | 98% |
+| text head sampled, T=1 + pacing guard | **91%** | 58% | 95% | 52% |
 
 Lower voice-box temperature does not help; forcing the text forward halves WER, confirming the stall
-as the main failure, but the aligned model remains far behind the baseline. Working hypothesis under
-test: because most training frames are PAD, the next-token probability at the right frame is often
-below 50%, so a **greedy** binary choice always picks "wait"; sampling the choice (text temperature
-~1) should place tokens at roughly the trained rate. Results will be added here.
+as the main failure. We also tested the hypothesis that the stall is an artefact of **greedy** text
+decoding (most training frames are PAD, so a calibrated next-token probability below 50% would always
+lose a greedy binary choice). **Rejected:** sampling the text head (T=0.7 or 1) leaves placement at
+~27%, so the model itself assigns low probability to advancing; the stall is learned, not a decoding
+artefact. Sampling helps only on top of the pacing guard (best aligned result: 91% WER, 95% of tokens
+placed), and about half of the outputs still never stop. Fixing the aligned layout therefore needs a
+training-side change (e.g. stronger supervision of token timing and of the stop decision, overlapping
+or shorter chunks), planned for M4 where streaming requires this layout.
 
 **Conclusion so far (indicative: one run per layout, one seed).** For this ~30M model and this data,
 text-then-audio clearly beats the aligned "inner monologue" layout under the decoding we used. That
@@ -304,8 +312,10 @@ Plan: finish M2 evaluation on Kaggle or Google Colab (free); keep Modal's free H
 
 ## 7. Next steps
 
-1. Test sampled text-head decoding for the aligned model (§3.8 hypothesis) and record the result.
-2. Fix the aligned decoder/training for M4–M5, where streaming needs the aligned layout.
+1. Test long-text generation with overlapping parts (generate 1–2 sentences at a time, the previous
+   part as context) on the same 200 passages.
+2. Fix the aligned layout's training for M4–M5 (token-timing and stop supervision, overlapping chunks),
+   where streaming needs this layout.
 3. M3: a ~100M text brain on FineWeb-Edu (Modal H100s), then M4 brain + voice at ~100M.
 
 ---

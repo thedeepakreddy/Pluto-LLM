@@ -112,3 +112,16 @@ def test_decontaminator_no_false_positives_at_scale():
 
     d = Decontaminator(text(60) for _ in range(40000))  # ~2M benchmark 13-grams, like the real set
     assert sum(d.contaminated(text(1000)) for _ in range(200)) == 0  # 32-bit hashes flag ~40%
+
+
+def test_parallel_prepare_identical(workspace, stories_path, monkeypatch):
+    docs = [{"text": GOOD}, {"text": GOOD.upper()}, {"text": "Kaufen Sie jetzt billig online " * 10},
+            {"text": GOOD + " " + GOOD.replace("cat", "dog")}, {"text": GOOD + " " + GOOD.replace("cat", "cow")}]
+    docs += [{"text": f"Story {i}. " + GOOD.replace("cat", f"cat{i}")} for i in range(600)]
+    src = [_src("web", _jsonl(workspace / "w.jsonl", docs))]
+    outs = []
+    for w in (1, 3):
+        cfg = _cfg(workspace, stories_path, src, quality_filters=True, near_dedup=True, workers=w)
+        out = prepare_data(cfg)
+        outs.append(((out / "train.jsonl").read_text(), read_manifest(out)["extra"]["clean"]))
+    assert outs[0] == outs[1]

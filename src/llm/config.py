@@ -51,6 +51,7 @@ class DataConfig:
     quality_filters: bool = False  # M3: Gopher-style prose heuristics (sources path only)
     decontaminate: tuple[str, ...] = ()  # benchmark names (llm.data.benchmarks) to remove 13-gram overlap with
     near_dedup: bool = False  # M3: MinHash near-duplicate removal, global across sources
+    workers: int = 1  # >1: per-document analysis in a process pool (output identical to 1)
     min_chars: int = 20
     max_chars: int = 20000
     split: dict[str, float] = field(

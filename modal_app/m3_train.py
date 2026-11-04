@@ -145,7 +145,7 @@ def _check_sources() -> None:
         raise SystemExit("source check failed (see FAIL lines)")
 
 
-@app.function(cpu=8, memory=32768, timeout=24 * 3600, volumes={"/vol": volume}, secrets=SECRETS)
+@app.function(cpu=8, memory=24576, timeout=24 * 3600, volumes={"/vol": volume}, secrets=SECRETS)
 def cpu_job(steps: list[str]) -> None:
     _checkout()
     try:

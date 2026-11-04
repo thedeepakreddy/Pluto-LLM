@@ -116,12 +116,19 @@ class NearDedup:
         h = (sh[:, None] * self.a[None, :] + self.b[None, :]) >> np.uint64(3)
         return h.min(axis=0)
 
-    def is_duplicate(self, text: str) -> bool:
-        """True if near-duplicate of an earlier document; otherwise records this one."""
+    def band_keys(self, text: str) -> list[int]:
+        """The LSH band keys of a document (pure: safe to compute in worker processes)."""
         sig = self.signature(text).reshape(self.bands, self.rows)
-        keys = [int.from_bytes(hashlib.blake2b(bytes([i]) + sig[i].tobytes(), digest_size=8).digest(), "little")
+        return [int.from_bytes(hashlib.blake2b(bytes([i]) + sig[i].tobytes(), digest_size=8).digest(), "little")
                 for i in range(self.bands)]
+
+    def check_and_add(self, keys: list[int]) -> bool:
+        """True if any band matches an earlier kept document; otherwise records these keys."""
         if any(k in self.seen for k in keys):
             return True
         self.seen.update(keys)
         return False
+
+    def is_duplicate(self, text: str) -> bool:
+        """True if near-duplicate of an earlier document; otherwise records this one."""
+        return self.check_and_add(self.band_keys(text))

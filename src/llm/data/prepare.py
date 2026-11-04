@@ -74,47 +74,101 @@ def prepare_data(cfg: Config) -> Path:
     return out
 
 
+_W: dict = {}  # per-process analysis state (worker processes, or the main process if workers == 1)
+
+
+def _init_analysis(d) -> None:
+    _W["d"] = d
+    _W["decon"] = Decontaminator(benchmark_texts(d.decontaminate)) if d.decontaminate else None
+    _W["near"] = NearDedup() if d.near_dedup else None
+
+
+def _analyze(batch: list[tuple[str, bool]]) -> list[tuple]:
+    """Order-independent work per document: (text or None if invalid UTF-8, length reason,
+    fingerprint, heuristic reason, contaminated, near-dedup band keys). Runs in parallel."""
+    d, decon, near = _W["d"], _W["decon"], _W["near"]
+    out = []
+    for doc, prose in batch:
+        try:
+            doc.encode("utf-8")
+        except UnicodeEncodeError:
+            out.append((None, None, None, None, False, None))
+            continue
+        text = normalize_text(doc)
+        length = "too_short" if len(text) < d.min_chars else "too_long" if len(text) > d.max_chars else None
+        if length is not None:
+            out.append((text, length, None, None, False, None))
+            continue
+        heur = heuristic_reason(text) if d.quality_filters and prose else None
+        cont = heur is None and decon is not None and decon.contaminated(text)
+        keys = near.band_keys(text) if near is not None and heur is None and not cont else None
+        out.append((text, None, fingerprint(text), heur, cont, keys))
+    return out
+
+
+def _batches(docs, prose: bool, size: int = 256):
+    batch = []
+    for doc in docs:
+        batch.append((doc, prose))
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
 def _iter_m3(d, stats: CleanStats, per: list[SourceStats]):
     """All sources in order -> length filter -> normalised exact dedup -> prose heuristics ->
-    decontamination -> near-dedup. Dedup is global across sources; every drop is counted."""
+    decontamination -> near-dedup. Dedup is global across sources; every drop is counted.
+
+    With data.workers > 1 the per-document analysis runs in a process pool (ordered), and the
+    order-dependent dedup decisions stay here, so the output is identical to workers == 1."""
+    import multiprocessing as mp
+
     for r in QUALITY_REASONS:
         stats.dropped[r] = 0
-    decon = (Decontaminator(benchmark_texts(d.decontaminate)) if d.decontaminate else None)
-    near = NearDedup() if d.near_dedup else None
+    pool = mp.get_context("spawn").Pool(d.workers, _init_analysis, (d,)) if d.workers > 1 else None
+    if pool is None:
+        _init_analysis(d)
+    near = NearDedup() if d.near_dedup else None  # the shared "seen" set lives in this process
     seen: set[bytes] = set()
-    for src in d.sources:
-        per.append(SourceStats(src.name))
-        for doc in iter_source(src, per[-1]):
-            stats.received += 1
-            try:
-                doc.encode("utf-8")
-            except UnicodeEncodeError:
-                stats.dropped["invalid_utf8"] += 1
-                continue
-            text = normalize_text(doc)
-            reason = ("too_short" if len(text) < d.min_chars else "too_long" if len(text) > d.max_chars
-                      else None)
-            if reason is None:
-                fp = fingerprint(text)
-                reason = "exact_duplicate" if fp in seen else None
-            if reason is None and d.quality_filters and src.prose:
-                reason = heuristic_reason(text)
-            if reason is None and decon is not None and decon.contaminated(text):
-                reason = "contaminated"
-            if reason is None and near is not None and near.is_duplicate(text):
-                reason = "near_duplicate"
-            if reason is not None:
-                stats.dropped[reason] += 1
-                continue
-            seen.add(fp)
-            stats.kept += 1
-            if stats.kept % 100_000 == 0:  # progress for long runs (Modal logs)
-                print(f"[prepare] {src.name}: received {per[-1].received:,} docs, "
-                      f"{per[-1].bytes / 1e9:.2f} GB; kept {stats.kept:,} total; dropped "
-                      f"{ {k: v for k, v in stats.dropped.items() if v} }", flush=True)
-            yield text
-        if per[-1].received == 0:
-            raise ValueError(f"data source '{src.name}' ({src.path}) is empty")
+    try:
+        for src in d.sources:
+            per.append(SourceStats(src.name))
+            batches = _batches(iter_source(src, per[-1]), src.prose)
+            results = pool.imap(_analyze, batches) if pool is not None else map(_analyze, batches)
+            for batch in results:
+                for text, length, fp, heur, cont, keys in batch:
+                    stats.received += 1
+                    if text is None:
+                        reason = "invalid_utf8"
+                    elif length is not None:
+                        reason = length
+                    elif fp in seen:
+                        reason = "exact_duplicate"
+                    elif heur is not None:
+                        reason = heur
+                    elif cont:
+                        reason = "contaminated"
+                    elif near is not None and near.check_and_add(keys):
+                        reason = "near_duplicate"
+                    else:
+                        reason = None
+                    if reason is not None:
+                        stats.dropped[reason] += 1
+                        continue
+                    seen.add(fp)
+                    stats.kept += 1
+                    if stats.kept % 100_000 == 0:  # progress for long runs (Modal logs)
+                        print(f"[prepare] {src.name}: received {per[-1].received:,} docs, "
+                              f"{per[-1].bytes / 1e9:.2f} GB; kept {stats.kept:,} total; dropped "
+                              f"{ {k: v for k, v in stats.dropped.items() if v} }", flush=True)
+                    yield text
+            if per[-1].received == 0:
+                raise ValueError(f"data source '{src.name}' ({src.path}) is empty")
+    finally:
+        if pool is not None:
+            pool.terminate()
 
 
 def _cleaning_and_splits(d, clean: dict, splits: dict) -> list[str]:

@@ -54,9 +54,7 @@ def _flex_window(q, k, v, window: int) -> torch.Tensor | None:
         def mask_mod(b, h, qi, ki):
             return (ki <= qi) & (qi - ki < window)
         _FLEX[key] = create_block_mask(mask_mod, None, None, T, T, device=q.device)
-    if "fn" not in _FLEX:
-        _FLEX["fn"] = torch.compile(flex_attention, dynamic=False)
-    return _FLEX["fn"](q, k, v, block_mask=_FLEX[key])
+    return flex_attention(q, k, v, block_mask=_FLEX[key])  # fused: traced by the enclosing compile
 
 
 def _attend(q, k, v, impl: str, window: int | None, start: int, dropout: float = 0.0) -> torch.Tensor:
@@ -70,7 +68,9 @@ def _attend(q, k, v, impl: str, window: int | None, start: int, dropout: float =
         if T == 1:
             return F.scaled_dot_product_attention(q, k, v)
         return F.scaled_dot_product_attention(q, k, v, attn_mask=window_mask(T, S, start, None, q.device))
-    if T == S and dropout == 0.0:
+    if T == S and dropout == 0.0 and torch.compiler.is_compiling():
+        # FlexAttention only inside a torch.compile graph: eager calls run an unfused kernel that
+        # materialises the full score matrix (slower than masked SDPA)
         out = _flex_window(q, k, v, window)
         if out is not None:
             return out

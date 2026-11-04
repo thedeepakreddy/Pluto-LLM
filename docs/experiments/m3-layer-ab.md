@@ -13,7 +13,7 @@ Each variant changes one thing (window also turns on RoPE). Metric: validation b
 | gqa (2 of 6 KV heads) | 4.3189 | 1.4154 | ±0 | keep (same quality, +19–25% batch-1 decode speed, smaller KV cache) |
 | window 256 / every 4th layer global (+rope) | 4.0376 | 1.3232 | −0.092 (−0.005 vs rope) | keep (no loss; bounded KV memory for long calls) |
 | mtp (1 head, weight 0.3) | 4.3296 | 1.4189 | +0.003 | drop (no gain at this size; consistent with Gloeckle et al. 2024) |
-| all (incl. mtp) | — | — | — | run still in progress at writing |
+| all (incl. mtp) | 4.0247 | 1.3190 | −0.097 | best overall; gains are not additive (rope −0.087 + swiglu −0.040 alone); includes MTP, which alone hurt slightly |
 
 Recipe for M3 pilot/cloud: RoPE + RMSNorm + SwiGLU + GQA + hybrid sliding window (window = context/4,
 every 4th layer global), no MTP. Limitations: one seed, a 24M model and 300M tokens; effects may differ at

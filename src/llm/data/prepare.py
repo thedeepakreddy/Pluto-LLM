@@ -108,6 +108,10 @@ def _iter_m3(d, stats: CleanStats, per: list[SourceStats]):
                 continue
             seen.add(fp)
             stats.kept += 1
+            if stats.kept % 100_000 == 0:  # progress for long runs (Modal logs)
+                print(f"[prepare] {src.name}: received {per[-1].received:,} docs, "
+                      f"{per[-1].bytes / 1e9:.2f} GB; kept {stats.kept:,} total; dropped "
+                      f"{ {k: v for k, v in stats.dropped.items() if v} }", flush=True)
             yield text
         if per[-1].received == 0:
             raise ValueError(f"data source '{src.name}' ({src.path}) is empty")

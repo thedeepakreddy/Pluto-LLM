@@ -99,3 +99,16 @@ def test_source_with_nothing_kept_errors(workspace, stories_path):
                                               min_score_field="s", min_score=3)])
     with pytest.raises(ValueError, match="kept no documents"):
         prepare_data(cfg)
+
+
+def test_decontaminator_no_false_positives_at_scale():
+    import random
+    import string
+
+    rnd = random.Random(0)
+
+    def text(n):
+        return " ".join("".join(rnd.choices(string.ascii_lowercase, k=6)) for _ in range(n))
+
+    d = Decontaminator(text(60) for _ in range(40000))  # ~2M benchmark 13-grams, like the real set
+    assert sum(d.contaminated(text(1000)) for _ in range(200)) == 0  # 32-bit hashes flag ~40%

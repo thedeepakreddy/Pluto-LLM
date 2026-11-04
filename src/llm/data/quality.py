@@ -61,8 +61,15 @@ def _counts(xs) -> dict:
     return c
 
 
+def _h64(s: str) -> int:
+    """Deterministic 64-bit hash. 32-bit CRC collides far too often for millions of benchmark
+    n-grams (~35% false 'contaminated' flags per 1,000-word page); two seeded CRC32s are not
+    independent (CRC is affine in its start value), so BLAKE2b is used."""
+    return int.from_bytes(hashlib.blake2b(s.encode("utf-8"), digest_size=8).digest(), "little")
+
+
 def _gram_hashes(w: list[str], n: int) -> set[int]:
-    return {zlib.crc32(" ".join(w[i:i + n]).encode("utf-8")) for i in range(len(w) - n + 1)}
+    return {_h64(" ".join(w[i:i + n])) for i in range(len(w) - n + 1)}
 
 
 class Decontaminator:

@@ -100,6 +100,8 @@ model:
   n_head: 16
   n_kv_head: 4
   context_length: 16384
+  sliding_window: 1024
+  global_every: 4
   pos: rope
   norm: rmsnorm
   mlp: swiglu

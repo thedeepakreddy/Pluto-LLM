@@ -7,6 +7,14 @@ Then read: `CLAUDE.md` (rules), `docs/superpowers/specs/2026-11-03-pluto-archite
 
 ## LATEST STATE (2026-11-04 evening) — start here
 
+**UPDATE (A/B results in):** see `docs/experiments/m3-layer-ab.md`. Recipe chosen: RoPE + RMSNorm + SwiGLU + GQA
++ hybrid sliding window (1024, every 4th layer global); **MTP dropped** (+0.003 bpb, no gain). Pilot, cloud and
+extend16k configs updated. The `all` variant was still running; nothing waits on it. **Next: H100 bench of the
+pilot** (`PLUTO_GPU=H100 modal deploy modal_app/m3_train.py`, then
+`PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep --spawn`),
+then the user approves the token budget and the pilot training starts. Note: `summary` prints "last train -"
+(it looks for a `type: train` field the metrics rows may not carry): cosmetic, fix when convenient.
+
 **Running now:** the 8 layer A/B trainings on Modal (A10G, deployed app, started with
 `PLUTO_GPU=A10G modal run modal_app/m3_train.py --steps ab --spawn`; ~3–4 h, ~$4). Variants of the 24M
 `m3-ab-base`: base, rope, rmsnorm, swiglu, gqa, window, mtp, all (300M tokens each, same seed).

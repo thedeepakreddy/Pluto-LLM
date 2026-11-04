@@ -27,3 +27,8 @@ real-time voice), see `docs/01-decisions.md`.
   descriptions, or any file in the repo.
 - Commit trailer (user's choice, from 2026-11-02) is only:
   `Co-Authored-By: thedeepakreddy <thedeepakreddy1@gmail.com>`
+
+## Handoff rule (user's request, 2026-11-04)
+After **every** completed step, result or decision, update `docs/03-status-and-next-steps.md`
+("LATEST STATE" section: what ran, results, decisions, next actions) and commit + push it to `main`,
+so any new session or account can continue immediately.

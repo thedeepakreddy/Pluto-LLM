@@ -56,3 +56,9 @@ def test_spawn_flag_and_app_name():
     m = _load()
     assert m.APP_NAME == "pluto-m3-train"
     assert "spawn" in inspect.signature(m.main.info.raw_f if hasattr(m.main, "info") else m.main).parameters
+
+
+def test_validate_accepts_every_gpu_step():
+    m = _load()
+    for step in m.GPU_STEPS:
+        m._validate_gpu(step, "configs/m3-ab-base.yaml", "runs/x")

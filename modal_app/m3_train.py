@@ -85,6 +85,14 @@ def gpu_command(step: str, config: str, run: str, hub: str, sweep: bool = False)
     raise ValueError(f"unknown GPU step {step!r}")
 
 
+def _validate_gpu(step: str, config: str, run: str) -> None:
+    """Check a GPU step's inputs before starting a GPU ('ab' builds its own fixed commands)."""
+    if step == "ab":
+        ab_commands("x/y")
+        return
+    gpu_command(step, config, run, "x/y")
+
+
 def _sh(cmd: str, check: bool = True) -> int:
     """Run a fixed command in the repo, streaming its output."""
     import subprocess
@@ -243,7 +251,7 @@ def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = Fa
         raise SystemExit("--steps resume needs --run runs/<run-id>")
     if spawn:  # run on the deployed app: independent of this laptop (sleep, lid closed, offline)
         if gpu:
-            gpu_command(gpu[0], config, run, "x/y")
+            _validate_gpu(gpu[0], config, run)
             if only and not re.match(r"^[\w,]+$", only):
                 raise SystemExit("--only takes variant names, e.g. --only rope,window")
         fn_cpu = modal.Function.from_name(APP_NAME, "cpu_job")
@@ -258,7 +266,7 @@ def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = Fa
         print(f"CPU steps: {cpu}")
         cpu_job.remote(cpu)
     if gpu:
-        gpu_command(gpu[0], config, run, "x/y")  # validate before starting a GPU
+        _validate_gpu(gpu[0], config, run)  # validate before starting a GPU
         print(f"GPU step {gpu[0]} on {GPU}")
         if only and not re.match(r"^[\w,]+$", only):
             raise SystemExit("--only takes variant names, e.g. --only rope,window")

@@ -10,6 +10,7 @@ model that listens and talks back in real time, and longer term a model that can
 
 - Decisions and roadmap: [`docs/01-decisions.md`](docs/01-decisions.md)
 - Plan after M2 (M3–M6): [`docs/02-roadmap-m3-m6.md`](docs/02-roadmap-m3-m6.md)
+- **Current status and next steps:** [`docs/03-status-and-next-steps.md`](docs/03-status-and-next-steps.md)
 - Technical report (M1–M2, in progress): [`docs/papers/pluto-m1-m2-technical-report.md`](docs/papers/pluto-m1-m2-technical-report.md)
 - Milestone 1 design: [`docs/superpowers/specs/2026-11-01-m1-text-pipeline-design.md`](docs/superpowers/specs/2026-11-01-m1-text-pipeline-design.md)
 
@@ -17,7 +18,7 @@ model that listens and talks back in real time, and longer term a model that can
 |---|---|---|
 | M1 | Text pipeline end-to-end | ✅ done: [first run report](results/m1/m1-tinystories-20261101-205014-d0a9bc2/report.md) |
 | M2 | First voice model (~30M) on self-made TinyStories-Speech | ✅ done: **18.8% WER** (text-then-audio), [results](docs/papers/pluto-m1-m2-technical-report.md#38-evaluation-and-results-stage-4) |
-| M3 | Text "brain" (~400M cloud size): depth-focused data, modern layers, 16k context, reserved control tokens | next |
+| M3 | Text "brain" (~400M cloud size): depth-focused data, modern layers, 16k context, reserved control tokens | code ready; data preparation on Modal |
 | M4 | Brain + voice: multi-voice (voice IDs), real voices, fixed word timing | planned |
 | M5 | Mini-Live: full-duplex talk, thinks while listening and while speaking | planned |
 | M6 | Tools (web search, scientific calculator, code, documents), memory, research agent | planned |

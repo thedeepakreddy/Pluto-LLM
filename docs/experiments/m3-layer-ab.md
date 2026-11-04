@@ -18,3 +18,10 @@ Each variant changes one thing (window also turns on RoPE). Metric: validation b
 Recipe for M3 pilot/cloud: RoPE + RMSNorm + SwiGLU + GQA + hybrid sliding window (window = context/4,
 every 4th layer global), no MTP. Limitations: one seed, a 24M model and 300M tokens; effects may differ at
 150M/400M. The MTP speed use (self-speculative decoding) was not tested.
+
+## What happens to MTP (decision 2026-11-04)
+Code stays (`model.mtp_heads`, default 0); the 151M pilot trains without it. Revisit twice, each measured:
+1. **Scale test** before the 388M/500M run: short MTP on/off A/B at that size (literature: helps larger models).
+2. **Speed use (M5, real-time voice):** train only an MTP head on top of the frozen M3 model, then use it for
+   self-speculative decoding (draft token t+2, verify in one step; output identical). Measure acceptance rate
+   and real decode speed-up; keep only if it helps.

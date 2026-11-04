@@ -150,7 +150,7 @@ Run on the Mac, in the `Pluto-LLM` folder (`git pull origin main` first):
 
 - Task 6: `src/llm/eval/multiple_choice.py` + `llm eval-text` (needed before the M3 report, not before training).
 - Final whole-branch code review of the M3 work (plan's last step).
-- Later: code data (data v2), StackExchange/textbooks, MTP speculative decoding (only if the A/B keeps MTP).
+- Later: code data (data v2), StackExchange/textbooks; MTP revisits (scale A/B before 388M; post-hoc MTP head for self-speculative decoding in M5) — see docs/experiments/m3-layer-ab.md.
 
 ## Budget and rules (unchanged)
 

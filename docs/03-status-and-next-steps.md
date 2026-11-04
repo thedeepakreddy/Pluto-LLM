@@ -1,9 +1,62 @@
 # Pluto: status and next steps (living handoff)
 
-Updated 2026-11-04. Read this first when picking the project up (any person or AI assistant).
+Updated 2026-11-04 (evening). Read this first when picking the project up (any person or AI assistant).
 Then read: `CLAUDE.md` (rules), `docs/superpowers/specs/2026-11-03-pluto-architecture-design.md`
 (the approved architecture), `docs/superpowers/plans/2026-11-04-m3-text-brain.md` (the M3 plan),
 `docs/01-decisions.md` (decisions log), `docs/papers/pluto-m1-m2-technical-report.md` (results so far).
+
+## LATEST STATE (2026-11-04 evening) — start here
+
+**Running now:** the 8 layer A/B trainings on Modal (A10G, deployed app, started with
+`PLUTO_GPU=A10G modal run modal_app/m3_train.py --steps ab --spawn`; ~3–4 h, ~$4). Variants of the 24M
+`m3-ab-base`: base, rope, rmsnorm, swiglu, gqa, window, mtp, all (300M tokens each, same seed).
+
+**Done since the sections below were written:**
+- Data prepared on the `pluto-m3` Volume: **train 5,877,776,453 tokens** (59 shard files), **val 23,940,308
+  tokens**; 32k tokenizer with the reserved specials. (The per-reason drop counts in
+  `data/m3-mix-v1/data_report.md` have not been reviewed yet: run `--steps summary` and check that drops look
+  sane, roughly 10–40%.)
+- GPU rehearsal (A10G, `bench --sweep` on m3-ab-base): FlashAttention used everywhere; sliding window runs
+  (flex); GQA speeds batch-1 decode by +19–25% (368 → 437/459 tok/s); MFU 18–29% (tiny model); 1k → 16k context
+  halves throughput at 24M. Fixed after it: FlexAttention now only inside compiled graphs (`cdbdc00`).
+- Fixes: parallel data prep with 8 workers (byte-identical output), `modal deploy` + `--spawn` (jobs survive
+  the laptop sleeping), the `ab` launch check (`a9b6b46`).
+
+**Decisions taken by the user:**
+- Train the **151M pilot (`configs/m3-pilot.yaml`) first** on the H100 (~3–4 h, ~$15 estimated), then decide
+  about the 388M cloud model, which should use free/credit compute (Modal startup/academic credits, Kaggle,
+  cloud trials). Assistant advised against using a friend's Modal account/credits for this project
+  (account-sharing / multi-account credit use likely breaks Modal's terms); a real contributor running his own
+  jobs, or credit programs, are the clean routes.
+- One model, staged: M3 trains the text brain; M4 continues the **same** brain with speech (`init_from`).
+  Before M4, port `SpeechGPT` (src/llm/model/voice.py, still M2 layers) to the modern layers.
+
+**Next actions for the new session (in order):**
+1. When the A/B call finishes: user runs `modal run modal_app/m3_train.py --steps summary` and pastes it.
+   Compare each variant's final val_loss / bits-per-byte with `base`; write `docs/experiments/m3-layer-ab.md`;
+   keep only changes that help (expected: rope, rmsnorm, swiglu, gqa; judge window and mtp on evidence — MTP's
+   eval loss is next-token only, so it is a fair comparison). Update `configs/m3-pilot.yaml` (and cloud) to the
+   winning recipe (window/mtp fields off if they don't help).
+2. H100 bench: `PLUTO_GPU=H100 modal deploy modal_app/m3_train.py`, then
+   `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep --spawn`
+   (output in the dashboard: Apps → pluto-m3-train → gpu_job → logs). Present tokens/s, MFU, hours, cost.
+3. User gate: confirm the pilot's token budget (`train.max_steps`; data has 5.88B tokens), then
+   `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps train --config configs/m3-pilot.yaml --spawn`.
+   Resume after the 23.5 h limit or a crash: `--steps resume --run runs/<run-id> --spawn`.
+4. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
+   and add a step that uploads the prepared shards to the private HF repo (portable data for Kaggle/other
+   compute).
+5. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
+   section, README, cost log; final whole-branch review of the M3 code.
+
+**Practical notes for helping this user:**
+- The user runs commands on a Mac (zsh) in `~/Pluto-LLM` with a `modal-env` venv. Give commands one per
+  code block, never with `<placeholders>` (zsh treats `<` as a redirect; the user pastes literally).
+- `PLUTO_GPU` is fixed at **deploy** time for `--spawn` jobs: redeploy when switching GPU (A10G for cheap tests;
+  L4 often queues; H100 for real training). Redeploy after any pull that changes `modal_app/m3_train.py`.
+- Never Ctrl+C a running job's terminal; use `--spawn` for anything long.
+- Pushes go to `main` (Modal clones `main`); the old `claude/...` branch is still GitHub's default branch until
+  the user switches it in Settings.
 
 ## Where we are
 

@@ -1,5 +1,10 @@
 """M3 text brain on Modal: data preparation (CPU), benchmark and training (GPU).
 
+Long jobs: deploy once (and after every `git pull` that changes this file), then start with --spawn.
+They then run on Modal alone; the laptop may sleep or be closed:
+    modal deploy modal_app/m3_train.py
+    modal run modal_app/m3_train.py --steps prepare,tokenizer,shards --spawn
+
 Usage (from the repo root, after `git pull`):
     modal run modal_app/m3_train.py --steps check                       # CPU, ~2 min: 3 rows per source
     modal run --detach modal_app/m3_train.py --steps prepare,tokenizer,shards   # CPU, several hours
@@ -49,7 +54,8 @@ image = (
     .apt_install("git")
     .pip_install("torch>=2.4", "numpy", "pyyaml", "regex", "datasets", "matplotlib", "huggingface_hub")
 )
-app = modal.App("pluto-m3-train", image=image)
+APP_NAME = "pluto-m3-train"
+app = modal.App(APP_NAME, image=image)
 volume = modal.Volume.from_name("pluto-m3", create_if_missing=True)
 WORK = "/vol/Pluto-LLM"
 SECRETS = [modal.Secret.from_name("pluto-hf")]
@@ -218,7 +224,8 @@ def summary() -> None:
 
 
 @app.local_entrypoint()
-def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = False, only: str = ""):
+def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = False, only: str = "",
+         spawn: bool = False):
     chosen = [s.strip() for s in steps.split(",") if s.strip()]
     if chosen == ["summary"]:
         summary.remote()
@@ -234,6 +241,19 @@ def main(steps: str = "check", config: str = "", run: str = "", sweep: bool = Fa
         raise SystemExit(f"--steps {gpu[0]} needs --config configs/m3-....yaml")
     if gpu and gpu[0] == "resume" and not run:
         raise SystemExit("--steps resume needs --run runs/<run-id>")
+    if spawn:  # run on the deployed app: independent of this laptop (sleep, lid closed, offline)
+        if gpu:
+            gpu_command(gpu[0], config, run, "x/y")
+            if only and not re.match(r"^[\w,]+$", only):
+                raise SystemExit("--only takes variant names, e.g. --only rope,window")
+        fn_cpu = modal.Function.from_name(APP_NAME, "cpu_job")
+        fn_gpu = modal.Function.from_name(APP_NAME, "gpu_job")
+        call = fn_cpu.spawn(cpu) if cpu else fn_gpu.spawn(gpu[0], config, run, sweep, only)
+        print(f"started on the deployed app '{APP_NAME}' (call {call.object_id}); safe to close the laptop.\n"
+              f"Watch: Modal dashboard -> Apps -> {APP_NAME} (deployed) -> {'cpu_job' if cpu else 'gpu_job'}")
+        if cpu and gpu:
+            print("note: only the CPU steps were started; start the GPU step after they finish")
+        return
     if cpu:
         print(f"CPU steps: {cpu}")
         cpu_job.remote(cpu)

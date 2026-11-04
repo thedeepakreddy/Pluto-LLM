@@ -48,3 +48,11 @@ def test_bench_sweep_command():
     m = _load()
     assert m.gpu_command("bench", "configs/m3-pilot.yaml", "", "u/p", sweep=True) == \
         "llm bench configs/m3-pilot.yaml --sweep"
+
+
+def test_spawn_flag_and_app_name():
+    import inspect
+
+    m = _load()
+    assert m.APP_NAME == "pluto-m3-train"
+    assert "spawn" in inspect.signature(m.main.info.raw_f if hasattr(m.main, "info") else m.main).parameters

@@ -51,7 +51,9 @@ prompts). Overlapping chunks therefore become a *training* change for M4.
   code dataset (dropped for v1).
 - The first `prepare` run was **cancelled after ~30 min by Ctrl+C** in the terminal that started it,
   even with `--detach`. **Rule: after starting a detached job, close that terminal window; never Ctrl+C.**
-- Its traceback revealed a real bug: 32-bit n-gram hashes made decontamination flag ~35% of clean pages.
+- The second run died when the laptop lid was closed: `--detach` still needs the Mac awake.
+  Fixed with `modal deploy` + `--spawn` (the job runs on the deployed app).
+- The first run's traceback revealed a real bug: 32-bit n-gram hashes made decontamination flag ~35% of clean pages.
   Fixed with 64-bit BLAKE2b hashes + a regression test (commit `b832439`). Data must be (re)prepared
   with this fix; the cancelled run produced nothing usable.
 - Git: the repo's GitHub default branch is the old `claude/...` branch; set **`main` as default** in
@@ -62,7 +64,9 @@ prompts). Overlapping chunks therefore become a *training* change for M4.
 Run on the Mac, in the `Pluto-LLM` folder (`git pull origin main` first):
 
 1. **Data** (CPU, ~4–8 h, near-free):
-   `modal run --detach modal_app/m3_train.py --steps prepare,tokenizer,shards` → then close the window.
+   `modal deploy modal_app/m3_train.py` then
+   `modal run modal_app/m3_train.py --steps prepare,tokenizer,shards --spawn` → the job runs on Modal alone;
+   the laptop may sleep. (`--detach` still died when the laptop lid was closed.) Re-deploy after pulls.
    Watch: Modal dashboard, or `modal app list` + `modal app logs <ap-id> | tail -20`
    (lines like `[prepare] fineweb-edu: received ...`). If one step fails, rerun only the remaining steps.
 2. **Check the data**: `modal run modal_app/m3_train.py --steps summary` → read the per-reason drop counts

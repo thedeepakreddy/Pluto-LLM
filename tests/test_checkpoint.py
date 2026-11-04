@@ -10,7 +10,7 @@ from llm.config import ModelConfig, load_config
 from llm.model.gpt import GPT
 from llm.runs import create_run
 from llm.train.checkpoint import (TrainState, find_latest_valid, get_rng_state, load_checkpoint,
-                                  save_checkpoint, set_rng_state)
+                                  maybe_upload, save_checkpoint, set_rng_state)
 
 MCFG = ModelConfig(n_layer=1, d_model=32, n_head=2, context_length=16)
 
@@ -116,6 +116,20 @@ def test_no_tmp_files_left(tmp_path):
     m, opt = _setup()
     _save(tmp_path, m, opt, 1, is_best=True)
     assert not list((tmp_path / "checkpoints").glob("*.tmp"))
+
+
+def test_required_hub_upload_failure_is_reported(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    class BrokenApi:
+        def create_repo(self, *args, **kwargs):
+            raise OSError("offline")
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", BrokenApi)
+    checkpoint = tmp_path / "step.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    with pytest.raises(RuntimeError, match="required Hub upload failed"):
+        maybe_upload(tmp_path, checkpoint, "private/pluto-runs", required=True)
 
 
 def test_cli_generate(prepared_tokenized, capsys):

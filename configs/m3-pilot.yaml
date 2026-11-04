@@ -120,7 +120,7 @@ train:
   eval_batches: 50
   eval_split: val
   ckpt_every: 500
-  max_wall_time_s: 84600
-  cost_per_hour: 0.0
+  max_wall_time_s: 6000
+  cost_per_hour: 4.65
 run:
   name: m3-pilot

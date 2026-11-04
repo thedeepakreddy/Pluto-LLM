@@ -1,23 +1,35 @@
 # Pluto: status and next steps (living handoff)
 
-Updated 2026-11-04 (evening). Read this first when picking the project up (any person or AI assistant).
+Updated 2026-11-05. Read this first when picking the project up (any person or AI assistant).
 Then read: `CLAUDE.md` (rules), `docs/superpowers/specs/2026-11-03-pluto-architecture-design.md`
 (the approved architecture), `docs/superpowers/plans/2026-11-04-m3-text-brain.md` (the M3 plan),
 `docs/01-decisions.md` (decisions log), `docs/papers/pluto-m1-m2-technical-report.md` (results so far).
 
-## LATEST STATE (2026-11-04 evening) — start here
+## LATEST STATE (2026-11-05) — start here
 
-**UPDATE (A/B results in):** see `docs/experiments/m3-layer-ab.md`. Recipe chosen: RoPE + RMSNorm + SwiGLU + GQA
-+ hybrid sliding window (1024, every 4th layer global); **MTP dropped** (+0.003 bpb, no gain). Pilot, cloud and
-extend16k configs updated. The `all` variant finished: 1.3190 bpb (−0.097 vs base, best; gains not additive). **Next: H100 bench of the
-pilot** (`PLUTO_GPU=H100 modal deploy modal_app/m3_train.py`, then
-`PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep --spawn`),
-then the user approves the token budget and the pilot training starts. Note: `summary` prints "last train -"
-(it looks for a `type: train` field the metrics rows may not carry): cosmetic, fix when convenient.
+**UPDATE (A/B results and H100 bench in):** see `docs/experiments/m3-layer-ab.md`. Recipe chosen: RoPE + RMSNorm +
+SwiGLU + GQA + hybrid sliding window (1024, every 4th layer global); **MTP dropped** (+0.003 bpb, no gain).
+Pilot, cloud and extend16k configs updated. H100 pilot baseline: 287,403 tokens/s, 26.4% MFU, 1.82 s/step,
+28.5 GB peak memory, about 4.8 h for 5B tokens. Bench sweep variants ranged 4.6–5.3 h; see the dashboard
+table for detail. Using current Modal H100 + CPU/memory rates, budget roughly $22 for the measured 4.8 h;
+the current $10.92 balance alone will not cover the full run. The 5B training schedule is configured below;
+training has not started.
 
-**Running now:** the 8 layer A/B trainings on Modal (A10G, deployed app, started with
-`PLUTO_GPU=A10G modal run modal_app/m3_train.py --steps ab --spawn`; ~3–4 h, ~$4). Variants of the 24M
-`m3-ab-base`: base, rope, rmsnorm, swiglu, gqa, window, mtp, all (300M tokens each, same seed).
+**UPDATE (sessioned 5B pilot configured):** `train.max_steps=9537` × `tokens_per_step=524288` = **5,000,134,656
+tokens**. `train.max_wall_time_s=6000` is checked against each `train()` invocation, so it resets on every
+resume; cumulative elapsed time remains in checkpoint `TrainState.wall_time_s`. Resume config validation now
+ignores only `train.max_wall_time_s`, allowing the per-session cap to change while preserving the original
+schedule and all other run settings. The 6,000-second cap targets about 1h40 of loop time per session, leaving
+roughly 20 minutes for Modal startup, compilation, final checkpoint and Hub upload; at the
+bench rate, the budget is roughly 4.6–4.8 H100-hours, likely three sessions. `cost_per_hour=4.65` estimates
+H100 plus the Modal function CPU and memory for run cost accounting. Each wall-time stop saves a full
+checkpoint and requires the configured Hub sync to succeed before returning; if sync fails, the checkpoint
+remains on the Modal Volume and the session reports a failure rather than claiming a successful handoff. Python
+syntax and the config-diff smoke check passed; pytest could not run because it is absent locally, disk was full
+during dependency installation, and package-index DNS is unavailable.
+
+**Completed:** all 8 layer A/B trainings on Modal A10G (24M `m3-ab-base`, same seed, 300M tokens each): base,
+rope, rmsnorm, swiglu, gqa, window, mtp, all.
 
 **Done since the sections below were written:**
 - Data prepared on the `pluto-m3` Volume: **train 5,877,776,453 tokens** (59 shard files), **val 23,940,308
@@ -31,7 +43,8 @@ then the user approves the token budget and the pilot training starts. Note: `su
   the laptop sleeping), the `ab` launch check (`a9b6b46`).
 
 **Decisions taken by the user:**
-- Train the **151M pilot (`configs/m3-pilot.yaml`) first** on the H100 (~3–4 h, ~$15 estimated), then decide
+- Train the **151M pilot (`configs/m3-pilot.yaml`) first** on the H100 (bench measured ~4.8 h for 5B tokens;
+  current Modal rates estimate ~$22 including requested CPU/memory), then decide
   about the 388M cloud model, which should use free/credit compute (Modal startup/academic credits, Kaggle,
   cloud trials). Assistant advised against using a friend's Modal account/credits for this project
   (account-sharing / multi-account credit use likely breaks Modal's terms); a real contributor running his own
@@ -40,21 +53,13 @@ then the user approves the token budget and the pilot training starts. Note: `su
   Before M4, port `SpeechGPT` (src/llm/model/voice.py, still M2 layers) to the modern layers.
 
 **Next actions for the new session (in order):**
-1. When the A/B call finishes: user runs `modal run modal_app/m3_train.py --steps summary` and pastes it.
-   Compare each variant's final val_loss / bits-per-byte with `base`; write `docs/experiments/m3-layer-ab.md`;
-   keep only changes that help (expected: rope, rmsnorm, swiglu, gqa; judge window and mtp on evidence — MTP's
-   eval loss is next-token only, so it is a fair comparison). Update `configs/m3-pilot.yaml` (and cloud) to the
-   winning recipe (window/mtp fields off if they don't help).
-2. H100 bench: `PLUTO_GPU=H100 modal deploy modal_app/m3_train.py`, then
-   `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep --spawn`
-   (output in the dashboard: Apps → pluto-m3-train → gpu_job → logs). Present tokens/s, MFU, hours, cost.
-3. User gate: confirm the pilot's token budget (`train.max_steps`; data has 5.88B tokens), then
-   `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps train --config configs/m3-pilot.yaml --spawn`.
-   Resume after the 23.5 h limit or a crash: `--steps resume --run runs/<run-id> --spawn`.
-4. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
+1. Run CPU tests for the session cap, resume config comparison, and required handoff upload.
+2. After user approval, deploy the H100 Modal app and start the configured 5B-token pilot with `--spawn`.
+   Each session stops at 6,000 s; resume the same run ID next month.
+3. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
    and add a step that uploads the prepared shards to the private HF repo (portable data for Kaggle/other
    compute).
-5. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
+4. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
    section, README, cost log; final whole-branch review of the M3 code.
 
 **Practical notes for helping this user:**
@@ -72,8 +77,8 @@ then the user approves the token budget and the pilot training starts. Note: `su
 |---|---|
 | M1 text pipeline, M2 speech (~30M) | **done**, reported (§3.8 of the technical report) |
 | M3 text brain: code | **done and tested** (393+ tests), on `main` |
-| M3 data preparation on Modal | **running / to restart** (see "Next steps") |
-| M3 A/B tests, H100 bench, size decision, training | not started |
+| M3 data preparation on Modal | **done** |
+| M3 A/B tests, H100 bench | **done**; pilot training not started |
 
 ### M2 final results (for context)
 Text-then-audio 18.8% WER (ceiling 1.3%, floor 689%); aligned 192%. Aligned decoding fixes: pacing guard +
@@ -141,8 +146,8 @@ Run on the Mac, in the `Pluto-LLM` folder (`git pull origin main` first):
    then `m3-cloud.yaml`).
 6. **User gate**: choose size (150M vs 400M) and token budget from the measured hours; update the config's
    `max_steps`; record in `docs/01-decisions.md`.
-7. **Train** (H100, `--detach`, stops cleanly at 23.5 h; continue with `--steps resume --run runs/<id>`):
-   foundations stage (~20% of tokens), then the full mix with `train.init_from`, then `m3-extend16k`.
+7. **Train** (H100, `--spawn`, stops cleanly at 6,000 s per session; resume the same run next month).
+   The current decision is one full-mix 5B-token pilot; foundations and 16k extension remain later decisions.
 8. **Evaluate + report**: bits/byte, HellaSwag/ARC-Easy/PIQA (Task 6, multiple-choice eval, **not written
    yet**), samples; M3 section in the report; README; cost.
 

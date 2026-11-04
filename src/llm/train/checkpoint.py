@@ -173,8 +173,9 @@ def load_speech_model_for_inference(path_or_run_dir: Path):
 _CREATED_REPOS: set[str] = set()
 
 
-def maybe_upload(run_dir: Path, path: Path, hub_repo: str | None, is_best: bool = False) -> None:
-    """Best-effort sync of the run to a private Hugging Face Hub repo; never fails training.
+def maybe_upload(run_dir: Path, path: Path, hub_repo: str | None, is_best: bool = False,
+                 required: bool = False) -> None:
+    """Sync the run to a private Hub repo; optionally fail when a session handoff requires it.
 
     Uploads the run's small files (config, run.json, metrics, samples, logs) plus the new
     checkpoint and latest.json, so `llm pull-run` can restore the run in a fresh session.
@@ -198,7 +199,9 @@ def maybe_upload(run_dir: Path, path: Path, hub_repo: str | None, is_best: bool 
             api.upload_file(path_or_fileobj=str(f), path_in_repo=f"{run_dir.name}/checkpoints/{f.name}",
                             repo_id=hub_repo)
     except Exception as e:
-        warnings.warn(f"Hub upload failed (training continues): {e}")
+        warnings.warn(f"Hub upload failed: {e}")
+        if required:
+            raise RuntimeError(f"required Hub upload failed: {e}") from e
 
 
 def pull_run(hub_repo: str, run_id: str, runs_root: Path) -> Path:

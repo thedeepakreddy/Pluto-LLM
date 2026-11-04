@@ -204,11 +204,11 @@ class BaseTrainer:
         self.state.wall_time_s += dt
         self.state.cost_usd += dt / 3600 * self.t.cost_per_hour
 
-    def checkpoint(self, is_best: bool = False) -> None:
+    def checkpoint(self, is_best: bool = False, require_upload: bool = False) -> None:
         self._account()
         path = save_checkpoint(self.run_dir, self.model, self.optimizer, self.scaler, self.state,
                                self.provenance, self.cfg_dict, self.t.keep_last, is_best)
-        maybe_upload(self.run_dir, path, self.t.hub_repo, is_best)
+        maybe_upload(self.run_dir, path, self.t.hub_repo, is_best, required=require_upload)
 
     def _optimizer_step(self, pos: DataPosition) -> tuple[DataPosition, float, dict, float, float] | str:
         """One optimizer step over `accum` micro-batches.
@@ -255,7 +255,7 @@ class BaseTrainer:
         is_best = ev["val_loss"] < s.best_val_loss
         if is_best:
             s.best_val_loss = ev["val_loss"]
-        self.checkpoint(is_best)
+        self.checkpoint(is_best, require_upload=self.state.step >= self.t.max_steps)
 
     # ---------------------------------------------------------- main loop
     def run(self, stop_at_step: int | None = None) -> tuple[TrainState, str]:
@@ -269,7 +269,7 @@ class BaseTrainer:
                 while s.step < t.max_steps:
                     # Per session: each free-tier session gets the full budget before it is killed.
                     if t.max_wall_time_s is not None and time.time() - session_start >= t.max_wall_time_s:
-                        self.checkpoint()
+                        self.checkpoint(require_upload=True)
                         return s, "wall_time"
                     step_start = time.time()
                     result = self._optimizer_step(pos)
@@ -302,10 +302,10 @@ class BaseTrainer:
                     if done:
                         break
                     if stop.set:
-                        self.checkpoint()
+                        self.checkpoint(require_upload=True)
                         return s, "signal"
                     if stop_at_step is not None and s.step >= stop_at_step:
-                        self.checkpoint()
+                        self.checkpoint(require_upload=True)
                         return s, "stop_at_step"
             return s, "max_steps"
         finally:

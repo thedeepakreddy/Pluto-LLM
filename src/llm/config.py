@@ -123,7 +123,7 @@ class TrainConfig:
     eval_split: Literal["train", "val"] = "val"
     ckpt_every: int = 200
     keep_last: int = 3
-    max_wall_time_s: float | None = None
+    max_wall_time_s: float | None = None  # per invocation/session; not cumulative across resume
     cost_per_hour: float = 0.0
     wandb_project: str | None = None
     hub_repo: str | None = None
@@ -448,6 +448,8 @@ def flatten_dict(d: dict, prefix: str = "") -> dict:
 
 
 def config_diff(a: dict, b: dict) -> list[str]:
-    """Dotted keys whose values differ between two config dicts."""
+    """Dotted keys that change the run; the per-session wall-time cap is operational only."""
     fa, fb = flatten_dict(a), flatten_dict(b)
-    return sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
+    session_local = {"train.max_wall_time_s"}
+    return sorted(k for k in set(fa) | set(fb)
+                  if k not in session_local and fa.get(k) != fb.get(k))

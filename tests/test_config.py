@@ -2,7 +2,7 @@ import pytest
 import yaml
 
 from conftest import edit_yaml
-from llm.config import ConfigError, config_to_dict, grad_accum_steps, load_config
+from llm.config import ConfigError, config_diff, config_to_dict, grad_accum_steps, load_config
 
 
 def test_load_roundtrip(tiny_config, workspace):
@@ -64,3 +64,12 @@ def test_d_model_divisible_by_heads(tiny_config):
 def test_split_ratios_sum_to_one(tiny_config):
     with pytest.raises(ConfigError, match="split"):
         load_config(tiny_config, ["data.split={train: 0.5, val: 0.1, test: 0.1}"])
+
+
+def test_resume_config_diff_allows_only_session_wall_time_change(tiny_config):
+    saved = config_to_dict(load_config(tiny_config))
+    resumed = {**saved, "train": {**saved["train"], "max_wall_time_s": 6000}}
+    assert config_diff(saved, resumed) == []
+
+    resumed["train"]["max_steps"] += 1
+    assert config_diff(saved, resumed) == ["train.max_steps"]

@@ -90,3 +90,15 @@ until its milestone.
 and Project Gutenberg, with quality filters, near-dedup and 13-gram decontamination against HellaSwag,
 ARC, PIQA and GSM8K. Code (permissively licensed) is added later as a new data version; until then
 Pluto's programming ability is expected to be weak and will not be claimed.
+
+## 2026-11-05 — progressive depth growth (planned experiment)
+
+After training a model checkpoint, investigate adding Transformer residual blocks while preserving the learned
+weights. Initialize each added block's attention and MLP output projections to zero so the block begins as an
+identity residual path and the expanded model initially preserves the original model's behavior. Continue
+training the expanded model, then compare it with the unexpanded checkpoint on held-out evaluations. Replay a
+representative slice of earlier training data (or distill from the original model) if the new blocks need to
+learn from the earlier data distribution; historical examples do not update new weights automatically.
+
+This remains an experiment, not a commitment to scale the M3 pilot. Current `train.init_from` requires matching
+parameter names and shapes, so checkpoint expansion needs implementation and CPU tests before use.

@@ -61,6 +61,8 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
    compute).
 4. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
    section, README, cost log; final whole-branch review of the M3 code.
+5. As a separate follow-up experiment, implement identity-initialized residual block expansion and compare an
+   expanded checkpoint against its original on held-out evaluations; see `docs/01-decisions.md`.
 
 **Practical notes for helping this user:**
 - The user runs commands on a Mac (zsh) in `~/Pluto-LLM` with a `modal-env` venv. Give commands one per

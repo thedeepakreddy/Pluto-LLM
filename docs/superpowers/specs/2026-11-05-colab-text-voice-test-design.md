@@ -15,6 +15,7 @@ Give Deepak a simple, top-to-bottom Google Colab notebook using a free GPU to tr
 - Put the editable text and speech prompts in separate, conspicuous code cells. Explain exactly which lines to change.
 - Store `HF_TOKEN` only in Colab Secrets. Do not write credentials or generated results to GitHub or the private Hub.
 - Pull the M3 run checkpoint and the existing M2 aligned run from the private `pluto-runs` repo. The M3 tokenizer is not included in today's run upload, so add a CPU-only Modal step to publish that tokenizer folder to the same private repo.
+- The M2 tokenizer is also not in the Hub. If absent, recreate it in Colab from `configs/m2-warmstart.yaml` using the existing TinyStories prepare/tokenizer workflow; this adds about 15–40 minutes of CPU/download setup, but avoids another artifact-export path.
 - Wait until the current H100 session has stopped and committed its Volume before invoking the tokenizer publish step. The active run and its config remain untouched.
 - The notebook performs inference only; it does not train, resume, or modify either checkpoint.
 

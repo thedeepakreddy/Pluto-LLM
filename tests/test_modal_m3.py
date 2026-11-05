@@ -17,10 +17,16 @@ def _load():
 
 def test_steps_and_functions():
     m = _load()
-    assert m.CPU_STEPS == ("check", "prepare", "tokenizer", "shards")
+    assert m.CPU_STEPS == ("check", "prepare", "tokenizer", "shards", "publish-tokenizer")
     assert m.GPU_STEPS == ("bench", "train", "resume", "ab")
     for name in ("cpu_job", "gpu_job", "summary", "main"):
         assert hasattr(m, name)
+
+
+def test_tokenizer_publish_does_not_require_volume_commit():
+    m = _load()
+    assert not m._steps_mutate_volume(["publish-tokenizer"])
+    assert m._steps_mutate_volume(["tokenizer", "publish-tokenizer"])
 
 
 def test_commands_are_built_from_fixed_steps():

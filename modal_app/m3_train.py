@@ -1,4 +1,4 @@
-"""M3 text brain on Modal: data preparation (CPU), benchmark and training (GPU).
+"""M3 text brain on Modal: preparation and artifact publishing (CPU), benchmark and training (GPU).
 
 Long jobs: deploy once (and after every `git pull` that changes this file), then start with --spawn.
 They then run on Modal alone; the laptop may sleep or be closed:
@@ -7,6 +7,7 @@ They then run on Modal alone; the laptop may sleep or be closed:
 
 Usage (from the repo root, after `git pull`):
     modal run modal_app/m3_train.py --steps check                       # CPU, ~2 min: 3 rows per source
+    modal run modal_app/m3_train.py --steps publish-tokenizer --spawn   # CPU: publish tokenizer to private Hub
     modal run --detach modal_app/m3_train.py --steps prepare,tokenizer,shards   # CPU, several hours
     PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps bench --config configs/m3-pilot.yaml --sweep
     PLUTO_GPU=L4 modal run --detach modal_app/m3_train.py --steps ab     # layer A/B tests, ~20M model
@@ -19,7 +20,8 @@ Rehearse on a cheap GPU first (never debug on H100s):
 
 The code is cloned from GitHub (main) at run time; data, tokenizer, shards and runs persist on the
 `pluto-m3` Volume. Checkpoints sync to the private Hub repo <your-hf-name>/pluto-runs, so a run can
-be resumed after a crash or a timeout (training stops cleanly at train.max_wall_time_s, 23.5 h).
+be resumed after a crash or a timeout (training stops cleanly at train.max_wall_time_s per session). The
+`publish-tokenizer` CPU step uploads the M3 tokenizer artifact without committing the read-only Volume.
 Secrets: `pluto-hf` (HF_TOKEN). Cost: see the Modal dashboard; log it in the run notes.
 """
 from __future__ import annotations
@@ -33,8 +35,9 @@ REPO_URL = "https://github.com/thedeepakreddy/Pluto-LLM.git"
 BRANCH = "main"
 GPU = os.environ.get("PLUTO_GPU", "H100")
 DATA_CONFIG = "configs/m3-pilot.yaml"  # data/tokenizer/shards sections are shared by all M3 configs
-CPU_STEPS = ("check", "prepare", "tokenizer", "shards")
+CPU_STEPS = ("check", "prepare", "tokenizer", "shards", "publish-tokenizer")
 GPU_STEPS = ("bench", "train", "resume", "ab")
+_VOLUME_MUTATING_STEPS = frozenset(("prepare", "tokenizer", "shards"))
 # Layer A/B tests on the ~20M base (one change each, then all): same data, seed and tokens.
 AB_VARIANTS = [
     ("base", ()),
@@ -153,9 +156,13 @@ def _check_sources() -> None:
         raise SystemExit("source check failed (see FAIL lines)")
 
 
+def _steps_mutate_volume(steps: list[str]) -> bool:
+    return bool(_VOLUME_MUTATING_STEPS.intersection(steps))
+
+
 @app.function(cpu=8, memory=24576, timeout=24 * 3600, volumes={"/vol": volume}, secrets=SECRETS)
 def cpu_job(steps: list[str]) -> None:
-    _checkout()
+    hub = _checkout()
     try:
         if "check" in steps:
             _check_sources()
@@ -168,8 +175,23 @@ def cpu_job(steps: list[str]) -> None:
             volume.commit()
         if "shards" in steps:
             _sh(f"llm tokenize {DATA_CONFIG}")
+        if "publish-tokenizer" in steps:
+            import sys
+            from pathlib import Path
+
+            sys.path.insert(0, f"{WORK}/src")
+            from llm.config import load_config
+            from llm.hub import publish_folder
+            from llm.tokenizer.bpe import tokenizer_dir
+
+            cfg = load_config(f"{WORK}/{DATA_CONFIG}")
+            local_dir = Path(WORK) / tokenizer_dir(cfg)
+            remote_dir = tokenizer_dir(cfg).as_posix()
+            print(f"Publishing tokenizer artifact {remote_dir} to {hub}", flush=True)
+            publish_folder(local_dir, hub, remote_dir)
     finally:
-        volume.commit()
+        if _steps_mutate_volume(steps):
+            volume.commit()
 
 
 @app.function(gpu=GPU, cpu=8, memory=65536, timeout=24 * 3600, volumes={"/vol": volume}, secrets=SECRETS)

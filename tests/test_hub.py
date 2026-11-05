@@ -9,6 +9,8 @@ import pytest
 
 from conftest import run_pipeline
 from llm import cli
+from llm.hub import publish_folder
+from llm.manifest import ProvenanceError, write_manifest
 from llm.runs import create_run
 from llm.train.loop import train
 
@@ -75,3 +77,40 @@ def test_no_hub_calls_without_hub_repo(prepared_tokenized, fake_hub):
     cfg, _ = prepared_tokenized
     train(cfg, create_run(cfg), stop_at_step=3)
     assert fake_hub[1] == []
+
+
+class RecordingHubApi:
+    def __init__(self):
+        self.created = []
+        self.uploaded = []
+
+    def create_repo(self, repo_id, **kwargs):
+        self.created.append((repo_id, kwargs))
+
+    def upload_folder(self, **kwargs):
+        self.uploaded.append(kwargs)
+
+
+def test_publish_folder_creates_private_repo_and_uploads_verified_artifact(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "tokenizer.json").write_text('{"vocab": []}')
+    write_manifest(tokenizer_dir, "tokenizer", "m3-bpe", 1, ["tokenizer.json"], {})
+    api = RecordingHubApi()
+
+    publish_folder(tokenizer_dir, "user/pluto-runs", "tokenizers/m3-bpe-v1", api=api)
+
+    assert api.created == [("user/pluto-runs", {"private": True, "exist_ok": True})]
+    assert api.uploaded == [{
+        "folder_path": str(tokenizer_dir),
+        "path_in_repo": "tokenizers/m3-bpe-v1",
+        "repo_id": "user/pluto-runs",
+        "repo_type": "model",
+    }]
+
+
+def test_publish_folder_rejects_artifact_without_manifest(tmp_path):
+    (tmp_path / "tokenizer.json").write_text('{"vocab": []}')
+
+    with pytest.raises(ProvenanceError, match="no manifest.json"):
+        publish_folder(tmp_path, "user/pluto-runs", "tokenizers/m3-bpe-v1", api=RecordingHubApi())

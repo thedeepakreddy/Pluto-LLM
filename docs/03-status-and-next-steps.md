@@ -12,8 +12,8 @@ SwiGLU + GQA + hybrid sliding window (1024, every 4th layer global); **MTP dropp
 Pilot, cloud and extend16k configs updated. H100 pilot baseline: 287,403 tokens/s, 26.4% MFU, 1.82 s/step,
 28.5 GB peak memory, about 4.8 h for 5B tokens. Bench sweep variants ranged 4.6–5.3 h; see the dashboard
 table for detail. Using current Modal H100 + CPU/memory rates, budget roughly $22 for the measured 4.8 h;
-the current $10.92 balance alone will not cover the full run. The user reports that the H100 pilot training
-has now started with `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps train --config configs/m3-pilot.yaml --spawn`; current step and run ID have not been provided here.
+the user now reports **$1.80 Modal credit remaining**, so no further paid training should start until credit
+is available.
 
 **UPDATE (sessioned 5B pilot configured):** `train.max_steps=9537` × `tokens_per_step=524288` = **5,000,134,656
 tokens**. `train.max_wall_time_s=6000` is checked against each `train()` invocation, so it resets on every
@@ -27,6 +27,23 @@ checkpoint and requires the configured Hub sync to succeed before returning; if 
 remains on the Modal Volume and the session reports a failure rather than claiming a successful handoff. Python
 syntax and the config-diff smoke check passed; pytest could not run because it is absent locally, disk was full
 during dependency installation, and package-index DNS is unavailable.
+
+**UPDATE (first pilot session stopped):** The user reports Modal logged `stopped: wall_time at step 3034`
+at Nov 05 02:25:39.430. This is **3,034 / 9,537 steps = 1,590,689,792 tokens** (about 31.8% of the
+5,000,134,656-token schedule), so the full pilot is not complete. The trainer's wall-time branch checkpoints
+with a required Hub upload before returning `wall_time`; the log snippet indicates a clean stop, but the Hub
+artifact has not been independently checked here. The run ID has not been provided. Resume the same run after
+credits are available and its Hub checkpoint/run ID are confirmed.
+
+**UPDATE (Colab inference tester implemented):**
+[`notebooks/model_test_from_latest_checkpoint.ipynb`](../notebooks/model_test_from_latest_checkpoint.ipynb)
+loads the M3 text checkpoint and existing M2 aligned speech checkpoint separately. It has distinct editable
+`TEXT_PROMPT` and `VOICE_PROMPT` cells, and an optional M3-text-to-M2-speech chain. The notebook is inference
+only. The M2 tokenizer is rebuilt from the public TinyStories recipe only if absent; this uses CPU and does not
+build shards or train a model. The M3 tokenizer is not present in run uploads, so the new CPU-only
+`publish-tokenizer` Modal step must upload it before the M3 text cells can run. No Modal job was launched with
+the user's remaining $1.80. Local validation checked notebook JSON, Python syntax in all 11 code cells,
+empty outputs, and required prompts/setup; pytest and Colab GPU execution remain unavailable here.
 
 **Completed:** all 8 layer A/B trainings on Modal A10G (24M `m3-ab-base`, same seed, 300M tokens each): base,
 rope, rmsnorm, swiglu, gqa, window, mtp, all.
@@ -53,15 +70,15 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
   Before M4, port `SpeechGPT` (src/llm/model/voice.py, still M2 layers) to the modern layers.
 
 **Next actions for the new session (in order):**
-1. Monitor the active H100 pilot in Modal. Confirm the first session's checkpoint and Hub sync at its clean
-   6,000-second stop; resume that same run next month using its run ID.
+1. Confirm the step-3034 checkpoint and Hub sync from the Modal logs/repo, and record the run ID. Resume the
+   same run after credits are available; the schedule remains 9,537 steps total.
 2. Run CPU tests for the session cap, resume config comparison, and required handoff upload when the local
    test dependencies are available.
-3. Build the approved Colab text-and-voice inference notebook; plan saved for review at
-   `docs/superpowers/plans/2026-11-05-colab-model-test-from-latest-checkpoint.md`.
-4. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
-   and add a step that uploads the prepared shards to the private HF repo (portable data for Kaggle/other
-   compute).
+3. Publish the M3 tokenizer artifact when Modal credit allows, then run the approved Colab notebook on a free
+   GPU. The implementation plan is `docs/superpowers/plans/2026-11-05-colab-model-test-from-latest-checkpoint.md`.
+4. While the run is paused or in later sessions: write Task 6 (multiple-choice eval,
+   `src/llm/eval/multiple_choice.py`, `llm eval-text`), and add a step that uploads the prepared shards to
+   the private HF repo (portable data for Kaggle/other compute).
 5. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
    section, README, cost log; final whole-branch review of the M3 code.
 6. As a separate follow-up experiment, implement identity-initialized residual block expansion and compare an
@@ -83,7 +100,7 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
 | M1 text pipeline, M2 speech (~30M) | **done**, reported (§3.8 of the technical report) |
 | M3 text brain: code | **done and tested** (393+ tests), on `main` |
 | M3 data preparation on Modal | **done** |
-| M3 A/B tests, H100 bench | **done**; 151M pilot training active on H100 (user-reported) |
+| M3 A/B tests, H100 bench | **done**; 151M pilot session stopped cleanly at step 3034/9537 (user-reported), resume pending |
 
 ### M2 final results (for context)
 Text-then-audio 18.8% WER (ceiling 1.3%, floor 689%); aligned 192%. Aligned decoding fixes: pacing guard +
@@ -113,7 +130,7 @@ prompts). Overlapping chunks therefore become a *training* change for M4.
    `m3-cloud.yaml` (388M, cloud size, Option B), `m3-extend16k.yaml` (16k context stage).
    Data mix `m3-mix` v1 (~28 GB raw): FineWeb-Edu sample-10BT (int_score ≥ 3), Wikipedia 20231101.en,
    FineMath 4+, Project Gutenberg. **No code yet** (`bigcode/the-stack-smol` stayed gated).
-7. **Modal app** `modal_app/m3_train.py`: CPU steps `check, prepare, tokenizer, shards`; GPU steps
+7. **Modal app** `modal_app/m3_train.py`: CPU steps `check, prepare, tokenizer, shards, publish-tokenizer`; GPU steps
    `bench, train, resume, ab`; `summary`. Volume `pluto-m3`, secret `pluto-hf`, Hub repo `<hf-user>/pluto-runs`.
 
 ## What happened on 2026-11-03/04 (lessons)

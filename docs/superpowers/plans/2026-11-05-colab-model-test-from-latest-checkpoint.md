@@ -14,7 +14,7 @@
 
 - Notebook only downloads checkpoints and performs inference; it does not train, resume, or modify weights.
 - Keep `HF_TOKEN` in Colab Secrets; never save credentials or publish generated outputs.
-- Do not deploy or invoke the tokenizer publisher until the current H100 session has stopped cleanly.
+- Do not deploy or invoke the tokenizer publisher until the H100 session has stopped cleanly and the user is comfortable with the Modal credit cost.
 - Make the M3 text model and M2 voice model distinction clear; they are not one unified model.
 - Put prompt text in separately labeled editable cells and instruct the user exactly which variables to change.
 - Do not add AI session links to any commit or repository file.
@@ -23,6 +23,7 @@
 
 - A private Hub run ID or missing checkpoint must produce a clear setup error, not a traceback that looks like model failure.
 - A missing tokenizer artifact must give the exact publish step needed.
+- Missing M2 tokenizer must trigger the existing public TinyStories tokenizer build, without rebuilding shards or training.
 - A publisher-only CPU call must not commit a Volume snapshot, avoiding stale concurrent writes.
 - The optional speech chain must use M2 weights and must label that fact in its output.
 - Notebook shell commands and prompt strings must preserve quotes and Unicode safely.
@@ -42,11 +43,11 @@
 - Modal CPU step name: `publish-tokenizer`; upload `tokenizer_dir(load_config(configs/m3-pilot.yaml))` to `tokenizers/m3-bpe-v1` in the `pluto-runs` repo.
 - A publish-only `cpu_job` call performs no `volume.commit()`.
 
-- [ ] **Step 1: Write failing tests** for upload path/private repo setup and missing tokenizer manifest; add a Modal step exposure assertion.
-- [ ] **Step 2: Run tests to verify expected failures** with `pytest tests/test_hub.py tests/test_modal_m3.py -q`.
-- [ ] **Step 3: Implement** the upload helper and CPU step; commit the Volume only for steps that mutate data, tokenizer, or shards.
-- [ ] **Step 4: Run targeted tests** and `pytest -q -p no:cacheprovider` on CPU when dependencies are available.
-- [ ] **Step 5: Commit** the publisher and tests. Do not deploy or run it until the current H100 session is stopped.
+- [x] **Step 1: Write failing tests** for upload path/private repo setup and missing tokenizer manifest; add a Modal step exposure assertion.
+- [ ] **Step 2: Run tests to verify expected failures** with `pytest tests/test_hub.py tests/test_modal_m3.py -q` (blocked locally: `pytest` is unavailable).
+- [x] **Step 3: Implement** the upload helper and CPU step; commit the Volume only for steps that mutate data, tokenizer, or shards.
+- [ ] **Step 4: Run targeted tests** and `pytest -q -p no:cacheprovider` on CPU when dependencies are available (direct CPU smoke passed; pytest could not run).
+- [x] **Step 5: Commit** the publisher and tests. Deployment remains separate because Modal credit is low.
 
 ### Task 2: Build the ordered Colab inference notebook
 
@@ -55,13 +56,13 @@
 - Modify: `docs/03-status-and-next-steps.md`
 
 **Interfaces:**
-- Notebook sections: Goal; choose free GPU and add `HF_TOKEN` Colab Secret; clone/install; set M3 and M2 run IDs; download the latest checkpoint and M3 tokenizer; edit `TEXT_PROMPT`; generate text; edit `VOICE_PROMPT`; generate and play speech; optionally speak the M3 generated text with M2; troubleshooting.
-- `TEXT_RUN_ID` defaults to auto-discovery of the newest `m3-pilot-*` run with a Hub `checkpoints/latest.json`; the user may override it. `VOICE_RUN_ID` is an editable variable defaulting to the existing M2 aligned run. The loader selects the latest valid checkpoint within each chosen run.
+- Notebook sections: Goal; choose free GPU and add `HF_TOKEN` Colab Secret; clone/install; set M3 and M2 run IDs; download only the latest checkpoint from each; if needed, prepare TinyStories and recreate the M2 tokenizer (no shards), then test M2 voice; download/validate the M3 tokenizer; edit `TEXT_PROMPT`; generate text; optionally speak the M3 generated text with M2; troubleshooting.
+- `TEXT_RUN_ID` defaults to auto-discovery of the newest `m3-pilot-*` run with a Hub `checkpoints/latest.json`; the user may override it. `VOICE_RUN_ID` is an editable variable defaulting to the existing M2 aligned run. The notebook downloads the checkpoint named by each run's `latest.json`, not every retained training checkpoint.
 - Default M2 voice run: `m2-aligned-20261102-213616-72fb023`.
 - No Hub or GitHub uploads occur from the notebook.
 
-- [ ] **Step 1: Build notebook JSON** with short markdown and small code cells, keeping each setup/action in execution order.
-- [ ] **Step 2: Validate notebook format and Python cell syntax** locally; assert prompt variables and required sections exist.
-- [ ] **Step 3: Review all cell outputs/state** to ensure the notebook has no saved credentials, stale output, or hidden run-order dependency.
-- [ ] **Step 4: Update** `docs/03-status-and-next-steps.md` with the notebook path, tokenizer publish prerequisite, and validation limits.
-- [ ] **Step 5: Commit** the notebook, tests, and handoff update. State that Colab GPU execution remains for the user because it needs their private HF secret and free-runtime assignment.
+- [x] **Step 1: Build notebook JSON** with short markdown and small code cells, keeping each setup/action in execution order.
+- [x] **Step 2: Validate notebook format and Python cell syntax** locally; assert prompt variables and required sections exist.
+- [x] **Step 3: Review all cell outputs/state** to ensure the notebook has no saved credentials, stale output, or hidden run-order dependency.
+- [x] **Step 4: Update** `docs/03-status-and-next-steps.md` with the notebook path, tokenizer publish prerequisite, and validation limits.
+- [x] **Step 5: Commit** the notebook, tests, and handoff update. State that Colab GPU execution remains for the user because it needs their private HF secret and free-runtime assignment.

@@ -40,7 +40,8 @@ credits are available and its Hub checkpoint/run ID are confirmed.
 loads the M3 text checkpoint and existing M2 aligned speech checkpoint separately. It has distinct editable
 `TEXT_PROMPT` and `VOICE_PROMPT` cells, and an optional M3-text-to-M2-speech chain. The notebook is inference
 only. The M2 tokenizer is rebuilt from the public TinyStories recipe only if absent; this uses CPU and does not
-build shards or train a model. The M3 tokenizer is not present in run uploads, so the new CPU-only
+build shards or train a model. The notebook explicitly adds the cloned `src` directory to Python's import path
+for reliable `llm` imports. The M3 tokenizer is not present in run uploads, so the new CPU-only
 `publish-tokenizer` Modal step must upload it before the M3 text cells can run. No Modal job was launched with
 the user's remaining $1.80. Local validation checked notebook JSON, Python syntax in all 11 code cells,
 empty outputs, and required prompts/setup; pytest and Colab GPU execution remain unavailable here.

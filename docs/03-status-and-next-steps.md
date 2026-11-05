@@ -46,6 +46,13 @@ for reliable `llm` imports. The M3 tokenizer is not present in run uploads, so t
 the user's remaining $1.80. Local validation checked notebook JSON, Python syntax in all 11 code cells,
 empty outputs, and required prompts/setup; pytest and Colab GPU execution remain unavailable here.
 
+**UPDATE (Colab tokenizer download recovery):** The user reports that the CPU-only `publish-tokenizer` job
+finished, but M3 inference still raised `FileNotFoundError` for `tokenizers/m3-bpe-v1/tokenizer.json`. The
+notebook now refreshes the private Hub file list inside section 9 (so it sees an upload made after section 4),
+and the M3 generation cell checks for the local tokenizer first and points back to section 9 if it is missing.
+Local notebook JSON and cell syntax validation passed; Colab execution was not available here. Next: rerun
+section 9 in Colab, then rerun M3 generation.
+
 **Completed:** all 8 layer A/B trainings on Modal A10G (24M `m3-ab-base`, same seed, 300M tokens each): base,
 rope, rmsnorm, swiglu, gqa, window, mtp, all.
 

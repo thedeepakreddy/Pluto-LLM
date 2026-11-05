@@ -57,12 +57,14 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
    6,000-second stop; resume that same run next month using its run ID.
 2. Run CPU tests for the session cap, resume config comparison, and required handoff upload when the local
    test dependencies are available.
-3. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
+3. Build the approved Colab text-and-voice inference notebook; plan saved for review at
+   `docs/superpowers/plans/2026-11-05-colab-model-test-from-latest-checkpoint.md`.
+4. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
    and add a step that uploads the prepared shards to the private HF repo (portable data for Kaggle/other
    compute).
-4. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
+5. After training: eval (bits/byte, HellaSwag/ARC-Easy/PIQA with contamination check, samples), M3 report
    section, README, cost log; final whole-branch review of the M3 code.
-5. As a separate follow-up experiment, implement identity-initialized residual block expansion and compare an
+6. As a separate follow-up experiment, implement identity-initialized residual block expansion and compare an
    expanded checkpoint against its original on held-out evaluations; see `docs/01-decisions.md`.
 
 **Practical notes for helping this user:**

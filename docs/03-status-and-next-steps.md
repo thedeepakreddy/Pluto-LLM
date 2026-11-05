@@ -12,8 +12,8 @@ SwiGLU + GQA + hybrid sliding window (1024, every 4th layer global); **MTP dropp
 Pilot, cloud and extend16k configs updated. H100 pilot baseline: 287,403 tokens/s, 26.4% MFU, 1.82 s/step,
 28.5 GB peak memory, about 4.8 h for 5B tokens. Bench sweep variants ranged 4.6–5.3 h; see the dashboard
 table for detail. Using current Modal H100 + CPU/memory rates, budget roughly $22 for the measured 4.8 h;
-the current $10.92 balance alone will not cover the full run. The 5B training schedule is configured below;
-training has not started.
+the current $10.92 balance alone will not cover the full run. The user reports that the H100 pilot training
+has now started with `PLUTO_GPU=H100 modal run modal_app/m3_train.py --steps train --config configs/m3-pilot.yaml --spawn`; current step and run ID have not been provided here.
 
 **UPDATE (sessioned 5B pilot configured):** `train.max_steps=9537` × `tokens_per_step=524288` = **5,000,134,656
 tokens**. `train.max_wall_time_s=6000` is checked against each `train()` invocation, so it resets on every
@@ -53,9 +53,10 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
   Before M4, port `SpeechGPT` (src/llm/model/voice.py, still M2 layers) to the modern layers.
 
 **Next actions for the new session (in order):**
-1. Run CPU tests for the session cap, resume config comparison, and required handoff upload.
-2. After user approval, deploy the H100 Modal app and start the configured 5B-token pilot with `--spawn`.
-   Each session stops at 6,000 s; resume the same run ID next month.
+1. Monitor the active H100 pilot in Modal. Confirm the first session's checkpoint and Hub sync at its clean
+   6,000-second stop; resume that same run next month using its run ID.
+2. Run CPU tests for the session cap, resume config comparison, and required handoff upload when the local
+   test dependencies are available.
 3. While it trains: write Task 6 (multiple-choice eval, `src/llm/eval/multiple_choice.py`, `llm eval-text`),
    and add a step that uploads the prepared shards to the private HF repo (portable data for Kaggle/other
    compute).
@@ -80,7 +81,7 @@ rope, rmsnorm, swiglu, gqa, window, mtp, all.
 | M1 text pipeline, M2 speech (~30M) | **done**, reported (§3.8 of the technical report) |
 | M3 text brain: code | **done and tested** (393+ tests), on `main` |
 | M3 data preparation on Modal | **done** |
-| M3 A/B tests, H100 bench | **done**; pilot training not started |
+| M3 A/B tests, H100 bench | **done**; 151M pilot training active on H100 (user-reported) |
 
 ### M2 final results (for context)
 Text-then-audio 18.8% WER (ceiling 1.3%, floor 689%); aligned 192%. Aligned decoding fixes: pacing guard +
